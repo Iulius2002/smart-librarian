@@ -57,6 +57,18 @@
       <button id="clearBtn" class="btn" title="Șterge conversația">🗑️</button>
     </div>
   </div>
+<!-- TTS controls -->
+<div class="row" style="margin-top:8px">
+  <label class="switch">Voce:
+    <select id="voiceSelect"></select>
+  </label>
+  <label class="switch">Viteză:
+    <input id="rate" type="range" min="0.7" max="1.3" step="0.05" value="1.0">
+  </label>
+  <label class="switch">Pitch:
+    <input id="pitch" type="range" min="0.8" max="1.2" step="0.05" value="1.0">
+  </label>
+</div>
 
   <div class="footer">Folosește microfonul (dacă e suportat de browser). Răspunsurile pot fi citite cu TTS. </div>
 </div>
@@ -69,6 +81,12 @@
   const clearBtn = document.getElementById('clearBtn');
   const micBtn = document.getElementById('micBtn');
   const speakToggle = document.getElementById('speakToggle');
+
+    // TTS controls
+  const voiceSelect = document.getElementById('voiceSelect');
+  const rateEl = document.getElementById('rate');
+  const pitchEl = document.getElementById('pitch');
+
 
   let autoSpeak = false;
   let recognizing = false;
@@ -120,13 +138,36 @@
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
-  function speak(text) {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.0; u.pitch = 1.0; u.lang = 'ro-RO'; // ajustează limba/vocea după preferințe
-    window.speechSynthesis.speak(u);
+function speak(text) {
+  if (!('speechSynthesis' in window)) return;
+  const synth = window.speechSynthesis;
+  synth.cancel();
+
+  const chosenName = voiceSelect?.value || localStorage.getItem('voiceName');
+  const voices = synth.getVoices();
+  let voice = voices.find(v => v.name === chosenName);
+  if (!voice) {
+    voice = voices.find(v => (v.lang||'').toLowerCase().startsWith('ro')) || voices[0];
   }
+
+  const rate = parseFloat(rateEl?.value || '1.0');
+  const pitch = parseFloat(pitchEl?.value || '1.0');
+
+  const queue = splitIntoChunks(text, 180);
+  const speakNext = () => {
+    if (!queue.length) return;
+    const chunk = queue.shift();
+    const u = new SpeechSynthesisUtterance(chunk);
+    u.voice = voice || null;
+    u.lang = (voice && voice.lang) ? voice.lang : 'ro-RO';
+    u.rate = rate;    // recomandat: 0.9–1.05
+    u.pitch = pitch;  // recomandat: 0.95–1.05
+    u.onend = () => speakNext();
+    synth.speak(u);
+  };
+  speakNext();
+}
+
 
   function initSTT() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -153,6 +194,81 @@
   }
 
   recognition = initSTT();
+
+  // --- Voice list handling (prefer ro-RO) ---
+function populateVoices() {
+  if (!('speechSynthesis' in window)) return;
+  const all = window.speechSynthesis.getVoices() || [];
+  const sorted = all.slice().sort((a,b) => {
+    const ar = (a.lang||'').toLowerCase().startsWith('ro') ? -1 : 1;
+    const br = (b.lang||'').toLowerCase().startsWith('ro') ? -1 : 1;
+    if (ar !== br) return ar - br;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  voiceSelect.innerHTML = '';
+  sorted.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.name;
+    opt.textContent = `${v.name} — ${v.lang}`;
+    voiceSelect.appendChild(opt);
+  });
+  const saved = localStorage.getItem('voiceName');
+  const preferRo = sorted.find(v => (v.lang||'').toLowerCase().startsWith('ro'));
+  const fallback = sorted[0];
+  const target = sorted.find(v => v.name === saved) || preferRo || fallback;
+  if (target) {
+    voiceSelect.value = target.name;
+    localStorage.setItem('voiceName', target.name);
+  }
+}
+if ('speechSynthesis' in window) {
+  populateVoices();
+  window.speechSynthesis.onvoiceschanged = populateVoices;
+}
+voiceSelect?.addEventListener('change', () => {
+  localStorage.setItem('voiceName', voiceSelect.value);
+});
+
+// --- Split long text into natural chunks (sentences) ---
+function splitIntoChunks(text, maxLen = 180) {
+  const parts = [];
+  const sentences = text
+    .replace(/\s+/g,' ')
+    .split(/([\.!\?;:])\s+/)
+    .reduce((acc, cur) => {
+      if (!acc.length) { acc.push(''); }
+      if (/^[\.!\?;:]$/.test(cur)) {
+        acc[acc.length-1] += cur;
+      } else if (cur.trim()) {
+        acc.push(cur.trim());
+      }
+      return acc;
+    }, []).filter(Boolean);
+
+  let buf = '';
+  for (const s of sentences) {
+    if ((buf + ' ' + s).trim().length <= maxLen) {
+      buf = (buf ? buf + ' ' : '') + s;
+    } else {
+      if (buf) parts.push(buf);
+      if (s.length > maxLen) {
+        const chunks = s.split(/, /);
+        let b = '';
+        for (const c of chunks) {
+          if ((b + ', ' + c).length <= maxLen) b = (b ? b + ', ' : '') + c;
+          else { if (b) parts.push(b); b = c; }
+        }
+        if (b) parts.push(b);
+        buf = '';
+      } else {
+        buf = s;
+      }
+    }
+  }
+  if (buf) parts.push(buf);
+  return parts;
+}
+
 
   // ====== Events ======
   sendBtn.onclick = async () => {
