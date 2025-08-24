@@ -1,2 +1,4 @@
 openai>=1.36.0
 python-dotenv>=1.0.1
+chromadb>=0.5.3
+tiktoken>=0.7.0

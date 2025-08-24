@@ -6,7 +6,7 @@ venv/
 
 # Env & local data
 .env
-data/
+data/chroma_db/
 *.wav
 
 # OS
