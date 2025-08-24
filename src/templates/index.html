@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Librarian — RAG + TTS/STT</title>
+  <title>Smart Librarian — RAG + TTS/STT + Images</title>
   <style>
     :root {
       --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
@@ -22,7 +22,8 @@
     .bubble { padding:12px 14px; border-radius:12px; border:1px solid var(--border); max-width: 75%; line-height: 1.55; white-space:pre-wrap; }
     .bubble.user { background: var(--bubble-user); }
     .bubble.bot { background: var(--bubble-bot); }
-    .sources { margin-top:6px; font-size:12px; color: var(--muted); border-left:3px solid var(--accent-2); padding-left:10px; }
+    .actions { display:flex; gap:8px; margin:6px 0 0 46px; flex-wrap:wrap; }
+    .sources { margin-top:6px; font-size:12px; color: var(--muted); border-left:3px solid var(--accent-2); padding-left:10px; margin-left:46px; }
     .composer { display:flex; gap:10px; margin-top: 14px; flex-direction:column; }
     .input { flex:1; background: var(--panel); border:1px solid var(--border); color: var(--fg); padding:12px 14px; border-radius:12px; resize:vertical; min-height:48px; max-height: 180px; }
     .btn { border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); color: var(--fg); padding:10px 12px; border-radius:12px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
@@ -31,8 +32,9 @@
     .switch { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
     .switch select { background: var(--panel); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:6px 8px; }
     .footer { margin-top: 10px; color:var(--muted); font-size:12px; text-align:center; }
-    .typing { color:var(--muted); font-style:italic; }
-    .divider { height:1px; background:linear-gradient(90deg, transparent, #1e293b, transparent); margin: 12px 0; }
+    .typing { color:var(--muted); font-style:italic; margin-left:46px; }
+    .imgwrap { margin:8px 0 0 46px; }
+    .imgwrap img { width: 320px; height: auto; border-radius:12px; border:1px solid var(--border); display:block; }
     .hidden { display:none; }
   </style>
 </head>
@@ -41,8 +43,9 @@
   <div class="header">
     <div class="avatar">📚</div>
     <div class="brand">Smart Librarian</div>
-    <span class="pill">RAG + Tool + TTS/STT</span>
-    <span class="pill">FastAPI</span>
+    <span class="pill">RAG + Tool</span>
+    <span class="pill">TTS/STT</span>
+    <span class="pill">Images</span>
   </div>
 
   <div id="chat" class="chat"></div>
@@ -55,7 +58,7 @@
       <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
       <button id="clearBtn" class="btn" title="Șterge conversația">🗑️</button>
     </div>
-    <!-- TTS: selector de voce (fără rate/pitch) -->
+    <!-- TTS: selector de voce -->
     <div class="row" style="margin-top:8px">
       <label class="switch">Voce:
         <select id="voiceSelect"></select>
@@ -63,7 +66,7 @@
     </div>
   </div>
 
-  <div class="footer">Folosește microfonul (dacă e suportat de browser). Răspunsurile pot fi citite cu TTS.</div>
+  <div class="footer">Folosește microfonul dacă e suportat. Poți genera o imagine pentru fiecare recomandare (🎨).</div>
 </div>
 
 <script>
@@ -80,7 +83,7 @@
   let recognizing = false;
   let recognition = null;
 
-  // ====== Helpers ======
+  // ====== UI Helpers ======
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -93,18 +96,26 @@
     const av = el('div', 'avatar ' + (role==='user'?'user':''), role==='user'?'🙂':'🤖');
     const bub = el('div', 'bubble ' + (role==='user'?'user':'bot'));
     bub.textContent = text;
-
     row.appendChild(av);
     row.appendChild(bub);
+    chatEl.appendChild(row);
 
+    // actions (assistant only)
+    if (role === 'assistant') {
+      const actions = el('div','actions');
+      const imgBtn = el('button','btn','🎨 Imagine');
+      imgBtn.onclick = () => generateImageForMessage(row, text);
+      actions.appendChild(imgBtn);
+      chatEl.appendChild(actions);
+    }
+
+    // sources (assistant only)
     if (role==='assistant' && sources && sources.length) {
       const src = el('div','sources');
       src.textContent = 'Sources: ' + sources.map(s => `${s.title}`).join(' • ');
-      row.appendChild(el('div','avatar hidden')); // pad for alignment
-      row.appendChild(src);
+      chatEl.appendChild(src);
     }
 
-    chatEl.appendChild(row);
     chatEl.scrollTop = chatEl.scrollHeight;
 
     if (role === 'assistant' && autoSpeak && 'speechSynthesis' in window) {
@@ -125,7 +136,7 @@
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
-  // Split text în bucăți (fraze) pentru o redare fluentă
+  // ====== TTS helpers ======
   function splitIntoChunks(text, maxLen = 180) {
     const parts = [];
     const sentences = text
@@ -133,39 +144,31 @@
       .split(/([\.!\?;:])\s+/)
       .reduce((acc, cur) => {
         if (!acc.length) { acc.push(''); }
-        if (/^[\.!\?;:]$/.test(cur)) {
-          acc[acc.length-1] += cur;
-        } else if (cur.trim()) {
-          acc.push(cur.trim());
-        }
+        if (/^[\.!\?;:]$/.test(cur)) acc[acc.length-1] += cur;
+        else if (cur.trim()) acc.push(cur.trim());
         return acc;
       }, []).filter(Boolean);
 
     let buf = '';
     for (const s of sentences) {
-      if ((buf + ' ' + s).trim().length <= maxLen) {
-        buf = (buf ? buf + ' ' : '') + s;
-      } else {
+      if ((buf + ' ' + s).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + s;
+      else {
         if (buf) parts.push(buf);
         if (s.length > maxLen) {
-          const chunks = s.split(/, /);
-          let b = '';
+          const chunks = s.split(/, /); let b = '';
           for (const c of chunks) {
             if ((b + ', ' + c).length <= maxLen) b = (b ? b + ', ' : '') + c;
             else { if (b) parts.push(b); b = c; }
           }
           if (b) parts.push(b);
           buf = '';
-        } else {
-          buf = s;
-        }
+        } else buf = s;
       }
     }
     if (buf) parts.push(buf);
     return parts;
   }
 
-  // ====== TTS: populate voci și speak cu rate/pitch fixe ======
   function populateVoices() {
     if (!('speechSynthesis' in window)) return;
     const all = window.speechSynthesis.getVoices() || [];
@@ -175,7 +178,6 @@
       if (ar !== br) return ar - br;
       return (a.name || '').localeCompare(b.name || '');
     });
-
     voiceSelect.innerHTML = '';
     sorted.forEach(v => {
       const opt = document.createElement('option');
@@ -183,22 +185,18 @@
       opt.textContent = `${v.name} — ${v.lang}`;
       voiceSelect.appendChild(opt);
     });
-
     const saved = localStorage.getItem('voiceName');
     const preferRo = sorted.find(v => (v.lang||'').toLowerCase().startsWith('ro'));
-    const fallback = sorted[0];
-    const target = sorted.find(v => v.name === saved) || preferRo || fallback;
+    const target = sorted.find(v => v.name === saved) || preferRo || sorted[0];
     if (target) {
       voiceSelect.value = target.name;
       localStorage.setItem('voiceName', target.name);
     }
   }
-
   if ('speechSynthesis' in window) {
     populateVoices();
     window.speechSynthesis.onvoiceschanged = populateVoices;
   }
-
   voiceSelect?.addEventListener('change', () => {
     localStorage.setItem('voiceName', voiceSelect.value);
   });
@@ -207,32 +205,26 @@
     if (!('speechSynthesis' in window)) return;
     const synth = window.speechSynthesis;
     synth.cancel();
-
     const chosenName = voiceSelect?.value || localStorage.getItem('voiceName');
     const voices = synth.getVoices();
     let voice = voices.find(v => v.name === chosenName)
              || voices.find(v => (v.lang||'').toLowerCase().startsWith('ro'))
              || voices[0];
-
-    const rate = 1.0;   // fix
-    const pitch = 1.0;  // fix
-
+    const rate = 1.0, pitch = 1.0;
     const queue = splitIntoChunks(text, 180);
     const speakNext = () => {
       if (!queue.length) return;
-      const chunk = queue.shift();
-      const u = new SpeechSynthesisUtterance(chunk);
+      const u = new SpeechSynthesisUtterance(queue.shift());
       u.voice = voice || null;
       u.lang = (voice && voice.lang) ? voice.lang : 'ro-RO';
-      u.rate = rate;
-      u.pitch = pitch;
+      u.rate = rate; u.pitch = pitch;
       u.onend = () => speakNext();
       synth.speak(u);
     };
     speakNext();
   }
 
-  // ====== STT: Web Speech API ======
+  // ====== STT (Web Speech API) ======
   function initSTT() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return null;
@@ -240,23 +232,47 @@
     r.lang = 'ro-RO';
     r.interimResults = false;
     r.maxAlternatives = 1;
-    r.onresult = (ev) => {
-      const text = ev.results[0][0].transcript;
-      inputEl.value = text;
-    };
-    r.onend = () => {
-      recognizing = false;
-      micBtn.querySelector('.lbl').textContent = 'Start';
-      micBtn.disabled = false;
-    };
-    r.onerror = () => {
-      recognizing = false;
-      micBtn.querySelector('.lbl').textContent = 'Start';
-      micBtn.disabled = false;
-    };
+    r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; };
+    r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
+    r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
     return r;
   }
   recognition = initSTT();
+
+  // ====== Image Generation (client) ======
+  async function generateImageForMessage(rowEl, assistantText) {
+    // loader
+    const loader = el('div','typing');
+    loader.textContent = 'Se generează imaginea...';
+    chatEl.appendChild(loader);
+    chatEl.scrollTop = chatEl.scrollHeight;
+
+    try {
+      const res = await fetch('/api/image', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ text: assistantText })
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(()=>({detail:'Eroare la server'}));
+        addMessage('assistant', `⚠️ ${e.detail || 'Eroare la generarea imaginii'}`);
+        loader.remove();
+        return;
+      }
+      const data = await res.json();
+      const wrap = el('div','imgwrap');
+      const img = new Image();
+      img.src = 'data:image/png;base64,' + data.image_b64;
+      img.alt = data.title || 'Copertă';
+      wrap.appendChild(img);
+      chatEl.appendChild(wrap);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    } catch (err) {
+      addMessage('assistant', '⚠️ Nu am reușit să generez imaginea.');
+    } finally {
+      loader.remove();
+    }
+  }
 
   // ====== Events ======
   sendBtn.onclick = async () => {
@@ -264,7 +280,6 @@
     if (!text) return;
     addMessage('user', text);
     inputEl.value = '';
-
     setTyping(true);
     try {
       const res = await fetch('/api/chat', {
@@ -273,7 +288,6 @@
         body: JSON.stringify({message: text})
       });
       setTyping(false);
-
       if (!res.ok) {
         const e = await res.json().catch(()=>({error:'Eroare la server'}));
         addMessage('assistant', `⚠️ ${e.error || 'Eroare'}`);
@@ -288,10 +302,7 @@
   };
 
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendBtn.click();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
   });
 
   clearBtn.onclick = () => {
@@ -306,21 +317,13 @@
   };
 
   micBtn.onclick = () => {
-    if (!recognition) {
-      addMessage('assistant', '🎙️ Browserul tău nu suportă Speech Recognition.');
-      return;
-    }
+    if (!recognition) { addMessage('assistant', '🎙️ Browserul tău nu suportă Speech Recognition.'); return; }
     if (!recognizing) {
       recognizing = true;
       micBtn.querySelector('.lbl').textContent = 'Stop';
       micBtn.disabled = true;
-      try {
-        recognition.start();
-      } catch(e) {
-        recognizing = false;
-        micBtn.querySelector('.lbl').textContent = 'Start';
-        micBtn.disabled = false;
-      }
+      try { recognition.start(); }
+      catch(e) { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; }
     }
   };
 </script>
