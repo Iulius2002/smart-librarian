@@ -1,0 +1,224 @@
+<!-- src/templates/index.html -->
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Librarian — RAG + TTS/STT</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
+      --bubble-user:#1f2937; --bubble-bot:#0b1220; --border:#1f2937;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background: radial-gradient(1200px 600px at 20% -10%, #0b1220, #0f172a 60%), linear-gradient(180deg, #0f172a 0, #0b1020 100%); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+    .container { max-width: 980px; margin: 0 auto; padding: 24px; }
+    .header { display:flex; align-items:center; gap:12px; padding: 8px 0 20px; }
+    .brand { font-weight:700; letter-spacing:0.2px; font-size: 22px; }
+    .pill { border:1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--muted); padding:6px 10px; border-radius:999px; font-size:12px; }
+    .chat { background: rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:16px; min-height: 60vh; padding:20px; display:flex; flex-direction:column; gap:14px; }
+    .msg { display:flex; gap:10px; align-items:flex-start; }
+    .avatar { flex:0 0 36px; height:36px; width:36px; border-radius:8px; display:grid; place-items:center; font-size:18px; background: linear-gradient(135deg, #0ea5e9, #22d3ee); }
+    .avatar.user { background: linear-gradient(135deg, #6366f1, #a78bfa); }
+    .bubble { padding:12px 14px; border-radius:12px; border:1px solid var(--border); max-width: 75%; line-height: 1.55; white-space:pre-wrap; }
+    .bubble.user { background: var(--bubble-user); }
+    .bubble.bot { background: var(--bubble-bot); }
+    .sources { margin-top:6px; font-size:12px; color: var(--muted); border-left:3px solid var(--accent-2); padding-left:10px; }
+    .composer { display:flex; gap:10px; margin-top: 14px; }
+    .input { flex:1; background: var(--panel); border:1px solid var(--border); color: var(--fg); padding:12px 14px; border-radius:12px; resize:vertical; min-height:48px; max-height: 180px; }
+    .btn { border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); color: var(--fg); padding:10px 12px; border-radius:12px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+    .btn:hover { border-color:#334155; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .switch { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+    .switch input { width: 18px; height:18px; }
+    .footer { margin-top: 10px; color:var(--muted); font-size:12px; text-align:center; }
+    .typing { color:var(--muted); font-style:italic; }
+    .divider { height:1px; background:linear-gradient(90deg, transparent, #1e293b, transparent); margin: 12px 0; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="avatar">📚</div>
+    <div class="brand">Smart Librarian</div>
+    <span class="pill">RAG + Tool + TTS/STT</span>
+    <span class="pill">FastAPI</span>
+  </div>
+
+  <div id="chat" class="chat"></div>
+
+  <div class="composer">
+    <textarea id="input" class="input" placeholder="Scrie sau apasă 🎙️ pentru voce..."></textarea>
+    <div class="row">
+      <button id="micBtn" class="btn" title="Voice input (STT)">🎙️<span class="lbl">Start</span></button>
+      <button id="speakToggle" class="btn" title="Citește automat răspunsurile (TTS)">🔊 Auto</button>
+      <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
+      <button id="clearBtn" class="btn" title="Șterge conversația">🗑️</button>
+    </div>
+  </div>
+
+  <div class="footer">Folosește microfonul (dacă e suportat de browser). Răspunsurile pot fi citite cu TTS. </div>
+</div>
+
+<script>
+  // ====== State ======
+  const chatEl = document.getElementById('chat');
+  const inputEl = document.getElementById('input');
+  const sendBtn = document.getElementById('sendBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const micBtn = document.getElementById('micBtn');
+  const speakToggle = document.getElementById('speakToggle');
+
+  let autoSpeak = false;
+  let recognizing = false;
+  let recognition = null;
+
+  // ====== Helpers ======
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function addMessage(role, text, sources=null) {
+    const row = el('div', 'msg');
+    const av = el('div', 'avatar ' + (role==='user'?'user':''), role==='user'?'🙂':'🤖');
+    const bub = el('div', 'bubble ' + (role==='user'?'user':'bot'));
+    bub.textContent = text;
+
+    row.appendChild(av);
+    row.appendChild(bub);
+
+    if (role==='assistant' && sources && sources.length) {
+      const src = el('div','sources');
+      src.textContent = 'Sources: ' + sources.map(s => `${s.title}`).join(' • ');
+      row.appendChild(el('div','avatar hidden')); // pad for alignment
+      row.appendChild(src);
+    }
+
+    chatEl.appendChild(row);
+    chatEl.scrollTop = chatEl.scrollHeight;
+
+    // Speak if enabled
+    if (role === 'assistant' && autoSpeak && 'speechSynthesis' in window) {
+      speak(text);
+    }
+  }
+
+  function setTyping(on) {
+    let t = document.getElementById('typing');
+    if (on) {
+      if (!t) {
+        t = el('div','typing'); t.id='typing'; t.textContent='Asistentul scrie...';
+        chatEl.appendChild(t);
+      }
+    } else {
+      if (t) t.remove();
+    }
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.0; u.pitch = 1.0; u.lang = 'ro-RO'; // ajustează limba/vocea după preferințe
+    window.speechSynthesis.speak(u);
+  }
+
+  function initSTT() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const r = new SR();
+    r.lang = 'ro-RO'; // poți schimba/en-US etc.
+    r.interimResults = false;
+    r.maxAlternatives = 1;
+    r.onresult = (ev) => {
+      const text = ev.results[0][0].transcript;
+      inputEl.value = text;
+    };
+    r.onend = () => {
+      recognizing = false;
+      micBtn.querySelector('.lbl').textContent = 'Start';
+      micBtn.disabled = false;
+    };
+    r.onerror = () => {
+      recognizing = false;
+      micBtn.querySelector('.lbl').textContent = 'Start';
+      micBtn.disabled = false;
+    };
+    return r;
+  }
+
+  recognition = initSTT();
+
+  // ====== Events ======
+  sendBtn.onclick = async () => {
+    const text = inputEl.value.trim();
+    if (!text) return;
+    addMessage('user', text);
+    inputEl.value = '';
+
+    setTyping(true);
+    try {
+      const res = await fetch('/api/chat', {
+        method:'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: text})
+      });
+      setTyping(false);
+
+      if (!res.ok) {
+        const e = await res.json().catch(()=>({error:'Eroare la server'}));
+        addMessage('assistant', `⚠️ ${e.error || 'Eroare'}`);
+        return;
+      }
+      const data = await res.json();
+      addMessage('assistant', data.answer, data.sources || []);
+    } catch (err) {
+      setTyping(false);
+      addMessage('assistant', '⚠️ Nu am reușit să contactez serverul.');
+    }
+  };
+
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn.click();
+    }
+  });
+
+  clearBtn.onclick = () => {
+    chatEl.innerHTML = '';
+    window.speechSynthesis && window.speechSynthesis.cancel();
+  };
+
+  speakToggle.onclick = () => {
+    autoSpeak = !autoSpeak;
+    speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
+    speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
+  };
+
+  micBtn.onclick = () => {
+    if (!recognition) {
+      addMessage('assistant', '🎙️ Browserul tău nu suportă Speech Recognition.');
+      return;
+    }
+    if (!recognizing) {
+      recognizing = true;
+      micBtn.querySelector('.lbl').textContent = 'Stop';
+      micBtn.disabled = true; // prevenim dublu-click
+      try {
+        recognition.start();
+      } catch(e) {
+        recognizing = false;
+        micBtn.querySelector('.lbl').textContent = 'Start';
+        micBtn.disabled = false;
+      }
+    }
+  };
+</script>
+</body>
+</html>
