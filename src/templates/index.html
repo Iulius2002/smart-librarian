@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Librarian — RAG + TTS/STT + Images + Streaming</title>
+  <title>Smart Librarian — RAG + TTS/STT + Images + Streaming + Sessions</title>
   <style>
     :root {
       --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
@@ -46,6 +46,7 @@
     <span class="pill">TTS/STT</span>
     <span class="pill">Images</span>
     <span class="pill">Streaming</span>
+    <span class="pill">Sessions</span>
   </div>
 
   <div id="chat" class="chat"></div>
@@ -57,7 +58,7 @@
       <button id="speakToggle" class="btn" title="Citește automat răspunsurile (TTS)">🔊 Auto</button>
       <button id="autoImgToggle" class="btn" title="Generează automat imagine pentru fiecare răspuns">🖼️ Auto</button>
       <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
-      <button id="clearBtn" class="btn" title="Șterge conversația">🗑️</button>
+      <button id="clearBtn" class="btn" title="Începe conversație nouă">🗑️ New chat</button>
     </div>
     <!-- TTS: selector de voce -->
     <div class="row" style="margin-top:8px">
@@ -67,10 +68,29 @@
     </div>
   </div>
 
-  <div class="footer">Răspunsurile sosesc live (SSE). Poți genera automat imagini pentru fiecare răspuns (🖼️ Auto).</div>
+  <div class="footer">Conversațiile sunt păstrate pe sesiuni (localStorage). „New chat” creează un session nou.</div>
 </div>
 
 <script>
+  // ====== Session ======
+  const SESSION_KEY = 'sl_session_id';
+  function newSessionId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    // fallback
+    return 'sess-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+  function getSessionId() {
+    let sid = localStorage.getItem(SESSION_KEY);
+    if (!sid) { sid = newSessionId(); localStorage.setItem(SESSION_KEY, sid); }
+    return sid;
+  }
+  function rotateSessionId() {
+    const oldSid = localStorage.getItem(SESSION_KEY);
+    const newSid = newSessionId();
+    localStorage.setItem(SESSION_KEY, newSid);
+    return { oldSid, newSid };
+  }
+
   // ====== Elements & State ======
   const chatEl = document.getElementById('chat');
   const inputEl = document.getElementById('input');
@@ -239,19 +259,16 @@
   }
 
   // ====== STT (Web Speech API) ======
-  function initSTT() {
+  recognition = (function initSTT(){
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return null;
     const r = new SR();
-    r.lang = 'ro-RO';
-    r.interimResults = false;
-    r.maxAlternatives = 1;
+    r.lang = 'ro-RO'; r.interimResults = false; r.maxAlternatives = 1;
     r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; };
     r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
     r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
     return r;
-  }
-  recognition = initSTT();
+  })();
 
   // ====== Image Generation (client) ======
   async function generateImageForMessage(rowEl, assistantText) {
@@ -284,8 +301,10 @@
     }
   }
 
-  // ====== Streaming (SSE) ======
+  // ====== Streaming (SSE) + Sessions ======
   function sendStreaming(text) {
+    const sid = getSessionId();
+
     // adaugă mesajul userului
     addMessage('user', text);
     const { row, bub } = addAssistantPlaceholder();
@@ -295,7 +314,7 @@
     let es;
     try {
       if (!window.EventSource) throw new Error('EventSource not supported');
-      es = new EventSource(`/api/chat/stream?q=${encodeURIComponent(text)}`);
+      es = new EventSource(`/api/chat/stream?q=${encodeURIComponent(text)}&sid=${encodeURIComponent(sid)}`);
 
       es.addEventListener('sources', (ev) => {
         try {
@@ -310,13 +329,11 @@
         setTyping(false);
         if (ev.data === '[DONE]') {
           es.close();
-          // acțiuni după ce s-a încheiat streamul:
           const actions = el('div','actions');
           const imgBtn = el('button','btn','🎨 Imagine');
           imgBtn.onclick = () => generateImageForMessage(row, acc);
           actions.appendChild(imgBtn);
           chatEl.appendChild(actions);
-
           if (autoSpeak) speak(acc);
           if (autoImage) generateImageForMessage(row, acc);
           return;
@@ -340,18 +357,19 @@
       setTyping(true);
       fetch('/api/chat', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({message: text})
+        body: JSON.stringify({message: text, session_id: sid})
       }).then(r => r.json()).then(data => {
         setTyping(false);
-        bub.textContent = data.answer || '—';
+        const ans = data.answer || '—';
+        bub.textContent = ans;
         if (data.sources && data.sources.length) appendSources(data.sources);
         const actions = el('div','actions');
         const imgBtn = el('button','btn','🎨 Imagine');
-        imgBtn.onclick = () => generateImageForMessage(row, data.answer || '');
+        imgBtn.onclick = () => generateImageForMessage(row, ans);
         actions.appendChild(imgBtn);
         chatEl.appendChild(actions);
-        if (autoSpeak && data.answer) speak(data.answer);
-        if (autoImage && data.answer) generateImageForMessage(row, data.answer);
+        if (autoSpeak && ans) speak(ans);
+        if (autoImage && ans) generateImageForMessage(row, ans);
       }).catch(() => {
         setTyping(false);
         addMessage('assistant', '⚠️ Eroare la /api/chat.');
@@ -371,9 +389,19 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
   });
 
-  clearBtn.onclick = () => {
+  clearBtn.onclick = async () => {
+    // New chat = nou session_id + opțional curățare pe server
+    const { oldSid, newSid } = rotateSessionId();
     chatEl.innerHTML = '';
     window.speechSynthesis && window.speechSynthesis.cancel();
+    // opțional: anunță serverul să șteargă istoricul vechi
+    try {
+      await fetch('/api/session/reset', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ session_id: oldSid })
+      });
+    } catch {}
   };
 
   speakToggle.onclick = () => {
@@ -386,29 +414,6 @@
     autoImage = !autoImage;
     autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
     autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
-  };
-
-  // STT
-  recognition = (function initSTT(){
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
-    const r = new SR();
-    r.lang = 'ro-RO'; r.interimResults = false; r.maxAlternatives = 1;
-    r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; };
-    r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
-    r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
-    return r;
-  })();
-
-  micBtn.onclick = () => {
-    if (!recognition) { addMessage('assistant', '🎙️ Browserul tău nu suportă Speech Recognition.'); return; }
-    if (!recognizing) {
-      recognizing = true;
-      micBtn.querySelector('.lbl').textContent = 'Stop';
-      micBtn.disabled = true;
-      try { recognition.start(); }
-      catch(e) { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; }
-    }
   };
 
   // initialize voices
