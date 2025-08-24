@@ -55,6 +55,7 @@
     <div class="row">
       <button id="micBtn" class="btn" title="Voice input (STT)">🎙️<span class="lbl">Start</span></button>
       <button id="speakToggle" class="btn" title="Citește automat răspunsurile (TTS)">🔊 Auto</button>
+      <button id="autoImgToggle" class="btn" title="Generează automat imagine pentru fiecare răspuns">🖼️ Auto</button>
       <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
       <button id="clearBtn" class="btn" title="Șterge conversația">🗑️</button>
     </div>
@@ -66,7 +67,7 @@
     </div>
   </div>
 
-  <div class="footer">Folosește microfonul dacă e suportat. Poți genera o imagine pentru fiecare recomandare (🎨).</div>
+  <div class="footer">Folosește microfonul dacă e suportat. Poți genera automat imagini pentru răspunsuri (🖼️ Auto).</div>
 </div>
 
 <script>
@@ -77,9 +78,11 @@
   const clearBtn = document.getElementById('clearBtn');
   const micBtn = document.getElementById('micBtn');
   const speakToggle = document.getElementById('speakToggle');
+  const autoImgToggle = document.getElementById('autoImgToggle');
   const voiceSelect = document.getElementById('voiceSelect');
 
   let autoSpeak = false;
+  let autoImage = false;
   let recognizing = false;
   let recognition = null;
 
@@ -118,18 +121,20 @@
 
     chatEl.scrollTop = chatEl.scrollHeight;
 
+    // auto TTS
     if (role === 'assistant' && autoSpeak && 'speechSynthesis' in window) {
       speak(text);
+    }
+    // auto Image
+    if (role === 'assistant' && autoImage) {
+      generateImageForMessage(row, text);
     }
   }
 
   function setTyping(on) {
     let t = document.getElementById('typing');
     if (on) {
-      if (!t) {
-        t = el('div','typing'); t.id='typing'; t.textContent='Asistentul scrie...';
-        chatEl.appendChild(t);
-      }
+      if (!t) { t = el('div','typing'); t.id='typing'; t.textContent='Asistentul scrie...'; chatEl.appendChild(t); }
     } else {
       if (t) t.remove();
     }
@@ -148,7 +153,6 @@
         else if (cur.trim()) acc.push(cur.trim());
         return acc;
       }, []).filter(Boolean);
-
     let buf = '';
     for (const s of sentences) {
       if ((buf + ' ' + s).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + s;
@@ -203,8 +207,7 @@
 
   function speak(text) {
     if (!('speechSynthesis' in window)) return;
-    const synth = window.speechSynthesis;
-    synth.cancel();
+    const synth = window.speechSynthesis; synth.cancel();
     const chosenName = voiceSelect?.value || localStorage.getItem('voiceName');
     const voices = synth.getVoices();
     let voice = voices.find(v => v.name === chosenName)
@@ -241,11 +244,8 @@
 
   // ====== Image Generation (client) ======
   async function generateImageForMessage(rowEl, assistantText) {
-    // loader
-    const loader = el('div','typing');
-    loader.textContent = 'Se generează imaginea...';
-    chatEl.appendChild(loader);
-    chatEl.scrollTop = chatEl.scrollHeight;
+    const loader = el('div','typing'); loader.textContent = 'Se generează imaginea...';
+    chatEl.appendChild(loader); chatEl.scrollTop = chatEl.scrollHeight;
 
     try {
       const res = await fetch('/api/image', {
@@ -256,8 +256,7 @@
       if (!res.ok) {
         const e = await res.json().catch(()=>({detail:'Eroare la server'}));
         addMessage('assistant', `⚠️ ${e.detail || 'Eroare la generarea imaginii'}`);
-        loader.remove();
-        return;
+        loader.remove(); return;
       }
       const data = await res.json();
       const wrap = el('div','imgwrap');
@@ -314,6 +313,12 @@
     autoSpeak = !autoSpeak;
     speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
     speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
+  };
+
+  autoImgToggle.onclick = () => {
+    autoImage = !autoImage;
+    autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
+    autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
   };
 
   micBtn.onclick = () => {
