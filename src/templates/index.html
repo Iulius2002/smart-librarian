@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Librarian — RAG + TTS/STT + Images</title>
+  <title>Smart Librarian — RAG + TTS/STT + Images + Streaming</title>
   <style>
     :root {
       --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
@@ -35,7 +35,6 @@
     .typing { color:var(--muted); font-style:italic; margin-left:46px; }
     .imgwrap { margin:8px 0 0 46px; }
     .imgwrap img { width: 320px; height: auto; border-radius:12px; border:1px solid var(--border); display:block; }
-    .hidden { display:none; }
   </style>
 </head>
 <body>
@@ -46,6 +45,7 @@
     <span class="pill">RAG + Tool</span>
     <span class="pill">TTS/STT</span>
     <span class="pill">Images</span>
+    <span class="pill">Streaming</span>
   </div>
 
   <div id="chat" class="chat"></div>
@@ -67,7 +67,7 @@
     </div>
   </div>
 
-  <div class="footer">Folosește microfonul dacă e suportat. Poți genera automat imagini pentru răspunsuri (🖼️ Auto).</div>
+  <div class="footer">Răspunsurile sosesc live (SSE). Poți genera automat imagini pentru fiecare răspuns (🖼️ Auto).</div>
 </div>
 
 <script>
@@ -103,7 +103,6 @@
     row.appendChild(bub);
     chatEl.appendChild(row);
 
-    // actions (assistant only)
     if (role === 'assistant') {
       const actions = el('div','actions');
       const imgBtn = el('button','btn','🎨 Imagine');
@@ -112,23 +111,35 @@
       chatEl.appendChild(actions);
     }
 
-    // sources (assistant only)
     if (role==='assistant' && sources && sources.length) {
-      const src = el('div','sources');
-      src.textContent = 'Sources: ' + sources.map(s => `${s.title}`).join(' • ');
-      chatEl.appendChild(src);
+      appendSources(sources);
     }
 
     chatEl.scrollTop = chatEl.scrollHeight;
 
-    // auto TTS
     if (role === 'assistant' && autoSpeak && 'speechSynthesis' in window) {
       speak(text);
     }
-    // auto Image
     if (role === 'assistant' && autoImage) {
       generateImageForMessage(row, text);
     }
+  }
+
+  function addAssistantPlaceholder() {
+    const row = el('div', 'msg');
+    const av = el('div', 'avatar', '🤖');
+    const bub = el('div', 'bubble bot');
+    row.appendChild(av);
+    row.appendChild(bub);
+    chatEl.appendChild(row);
+    chatEl.scrollTop = chatEl.scrollHeight;
+    return { row, bub };
+  }
+
+  function appendSources(sources) {
+    const src = el('div','sources');
+    src.textContent = 'Sources: ' + sources.map(s => `${s.title}`).join(' • ');
+    chatEl.appendChild(src);
   }
 
   function setTyping(on) {
@@ -273,31 +284,87 @@
     }
   }
 
+  // ====== Streaming (SSE) ======
+  function sendStreaming(text) {
+    // adaugă mesajul userului
+    addMessage('user', text);
+    const { row, bub } = addAssistantPlaceholder();
+    setTyping(true);
+
+    let acc = ''; // acumulăm răspunsul final
+    let es;
+    try {
+      if (!window.EventSource) throw new Error('EventSource not supported');
+      es = new EventSource(`/api/chat/stream?q=${encodeURIComponent(text)}`);
+
+      es.addEventListener('sources', (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data && data.sources && data.sources.length) {
+            appendSources(data.sources);
+          }
+        } catch {}
+      });
+
+      es.onmessage = (ev) => {
+        setTyping(false);
+        if (ev.data === '[DONE]') {
+          es.close();
+          // acțiuni după ce s-a încheiat streamul:
+          const actions = el('div','actions');
+          const imgBtn = el('button','btn','🎨 Imagine');
+          imgBtn.onclick = () => generateImageForMessage(row, acc);
+          actions.appendChild(imgBtn);
+          chatEl.appendChild(actions);
+
+          if (autoSpeak) speak(acc);
+          if (autoImage) generateImageForMessage(row, acc);
+          return;
+        }
+        try {
+          const data = JSON.parse(ev.data);
+          const delta = data.delta || '';
+          acc += (acc ? ' ' : '') + delta;
+          bub.textContent = acc;
+          chatEl.scrollTop = chatEl.scrollHeight;
+        } catch {}
+      };
+
+      es.onerror = () => {
+        setTyping(false);
+        es && es.close();
+        addMessage('assistant', '⚠️ Conexiunea de streaming a fost întreruptă. Reîncercă.');
+      };
+    } catch (e) {
+      // Fallback: non-stream
+      setTyping(true);
+      fetch('/api/chat', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({message: text})
+      }).then(r => r.json()).then(data => {
+        setTyping(false);
+        bub.textContent = data.answer || '—';
+        if (data.sources && data.sources.length) appendSources(data.sources);
+        const actions = el('div','actions');
+        const imgBtn = el('button','btn','🎨 Imagine');
+        imgBtn.onclick = () => generateImageForMessage(row, data.answer || '');
+        actions.appendChild(imgBtn);
+        chatEl.appendChild(actions);
+        if (autoSpeak && data.answer) speak(data.answer);
+        if (autoImage && data.answer) generateImageForMessage(row, data.answer);
+      }).catch(() => {
+        setTyping(false);
+        addMessage('assistant', '⚠️ Eroare la /api/chat.');
+      });
+    }
+  }
+
   // ====== Events ======
-  sendBtn.onclick = async () => {
+  sendBtn.onclick = () => {
     const text = inputEl.value.trim();
     if (!text) return;
-    addMessage('user', text);
     inputEl.value = '';
-    setTyping(true);
-    try {
-      const res = await fetch('/api/chat', {
-        method:'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({message: text})
-      });
-      setTyping(false);
-      if (!res.ok) {
-        const e = await res.json().catch(()=>({error:'Eroare la server'}));
-        addMessage('assistant', `⚠️ ${e.error || 'Eroare'}`);
-        return;
-      }
-      const data = await res.json();
-      addMessage('assistant', data.answer, data.sources || []);
-    } catch (err) {
-      setTyping(false);
-      addMessage('assistant', '⚠️ Nu am reușit să contactez serverul.');
-    }
+    sendStreaming(text);
   };
 
   inputEl.addEventListener('keydown', (e) => {
@@ -321,6 +388,18 @@
     autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
   };
 
+  // STT
+  recognition = (function initSTT(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const r = new SR();
+    r.lang = 'ro-RO'; r.interimResults = false; r.maxAlternatives = 1;
+    r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; };
+    r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
+    r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
+    return r;
+  })();
+
   micBtn.onclick = () => {
     if (!recognition) { addMessage('assistant', '🎙️ Browserul tău nu suportă Speech Recognition.'); return; }
     if (!recognizing) {
@@ -331,6 +410,15 @@
       catch(e) { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; }
     }
   };
+
+  // initialize voices
+  if ('speechSynthesis' in window) {
+    populateVoices();
+    window.speechSynthesis.onvoiceschanged = populateVoices;
+  }
+  voiceSelect?.addEventListener('change', () => {
+    localStorage.setItem('voiceName', voiceSelect.value);
+  });
 </script>
 </body>
 </html>

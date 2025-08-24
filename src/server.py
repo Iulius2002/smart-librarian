@@ -1,10 +1,13 @@
+# src/server.py
 import os
 import re
+import json
+import asyncio
 import tempfile
 from typing import List, Dict
 
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -28,8 +31,44 @@ class TTSRequest(BaseModel):
     text: str
 
 class ImageRequest(BaseModel):
-    text: str           # textul răspunsului asistentului (vom extrage titlul)
-    title: str | None = None  # opțional, dacă vrei să trimiți direct titlul
+    text: str
+    title: str | None = None
+
+
+# ---------------- Utilities ----------------
+def _extract_title_from_text(text: str) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"[\"“„‚'«](.+?)[\"”’'»]", text)
+    if m:
+        return m.group(1).strip()
+    m2 = re.search(r"(?:Recomand(?:area)?|Cartea|Titlul)\s*:\s*([^\n\.,;:]+)", text, re.IGNORECASE)
+    if m2:
+        return m2.group(1).strip()
+    return None
+
+def _split_by_words(s: str, max_chars: int = 28):
+    """Împarte pe grupuri mici de cuvinte (~25–35 caractere)."""
+    if not s:
+        return
+    buf = ""
+    for tok in s.split():
+        if not buf:
+            buf = tok
+            continue
+        if len(buf) + 1 + len(tok) <= max_chars:
+            buf += " " + tok
+        else:
+            yield buf
+            buf = tok
+    if buf:
+        yield buf
+
+async def _yield_stream_chunks(text: str, chunk_chars: int = 28, delay_sec: float = 0.045):
+    """Trimite bucăți mici cu un delay scurt între ele (efect typing)."""
+    for chunk in _split_by_words(text, chunk_chars):
+        yield f'data: {json.dumps({"delta": chunk}, ensure_ascii=False)}\n\n'
+        await asyncio.sleep(delay_sec)
 
 
 # ---------------- Routes ----------------
@@ -44,11 +83,9 @@ def chat_endpoint(req: ChatRequest):
     if not msg:
         return JSONResponse({"error": "Mesajul este gol."}, status_code=400)
 
-    # 0) Filtru limbaj
     if contains_profanity(msg):
         return {"answer": "Prefer să păstrăm conversația politicoasă. Poți reformula te rog? 🙂", "sources": []}
 
-    # 1) Context RAG (top 3) pentru „Sources”
     snippets = build_context_snippets(msg, k=3)
     sources: List[Dict[str, str]] = []
     for s in snippets:
@@ -56,9 +93,58 @@ def chat_endpoint(req: ChatRequest):
         preview = (s["document"] or "").replace("\n", " ")[:220]
         sources.append({"title": title, "preview": preview})
 
-    # 2) Răspuns final (RAG + LLM + tool)
     answer = chat_once(msg, k=3)
     return {"answer": answer, "sources": sources}
+
+
+@app.get("/api/chat/stream")
+def chat_stream(q: str):
+    """
+    SSE: trimitem întâi sursele, apoi răspunsul în bucăți mici cu delay.
+    Notă: răspunsul final vine din chat_once() (după tool-calling), apoi îl „picurăm”.
+    """
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Mesajul este gol.")
+
+    if contains_profanity(q):
+        async def polite():
+            yield f'data: {json.dumps({"delta":"Prefer să păstrăm conversația politicoasă. Poți reformula te rog? 🙂"})}\n\n'
+            yield 'data: [DONE]\n\n'
+        return StreamingResponse(polite(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        })
+
+    async def event_gen():
+        # 1) Surse (RAG top-3)
+        snippets = build_context_snippets(q, k=3)
+        sources: List[Dict[str, str]] = []
+        for s in snippets:
+            title = s["metadata"].get("title", "N/A")
+            preview = (s["document"] or "").replace("\n", " ")[:220]
+            sources.append({"title": title, "preview": preview})
+        yield 'event: sources\n'
+        yield f'data: {json.dumps({"sources": sources}, ensure_ascii=False)}\n\n'
+
+        # 2) Răspuns final -> drip feed
+        answer = chat_once(q, k=3)
+        async for ev in _yield_stream_chunks(answer, chunk_chars=28, delay_sec=0.045):
+            yield ev
+
+        # 3) DONE + ping final
+        yield 'data: [DONE]\n\n'
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    })
+
+
+class TTSRequest(BaseModel):
+    text: str
 
 
 @app.post("/api/tts")
@@ -67,7 +153,6 @@ def tts_endpoint(req: TTSRequest):
     if not text:
         raise HTTPException(status_code=400, detail="Text gol.")
     try:
-        # mp3 bytes
         result = client.audio.speech.create(
             model=TTS_MODEL,
             voice="alloy",
@@ -106,27 +191,8 @@ async def stt_endpoint(audio: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Eroare STT: {e}")
 
 
-# ------------ Image Generation ------------
-def _extract_title_from_text(text: str) -> str | None:
-    """
-    Heuristic: caută titlul între ghilimele sau după cuvinte cheie.
-    """
-    if not text:
-        return None
-    m = re.search(r"[\"“„‚'«](.+?)[\"”’'»]", text)
-    if m:
-        return m.group(1).strip()
-
-    # fallback: caută pattern-uri tip „Recomand: 1984” / „Cartea: 1984”
-    m2 = re.search(r"(?:Recomand(?:area)?|Cartea|Titlul)\s*:\s*([^\n\.,;:]+)", text, re.IGNORECASE)
-    if m2:
-        return m2.group(1).strip()
-
-    return None
-
 @app.post("/api/image")
 def image_endpoint(req: ImageRequest):
-    # Dacă nu primim explicit titlul, încercăm să-l extragem din textul asistentului
     title = (req.title or "").strip() or _extract_title_from_text(req.text or "")
     if not title:
         raise HTTPException(status_code=400, detail="Nu am putut detecta titlul. Trimite 'title' explicit în request.")
@@ -143,7 +209,7 @@ def image_endpoint(req: ImageRequest):
             size="1024x1024",
             n=1,
         )
-        b64 = img.data[0].b64_json  # returnăm b64 pentru a fi afișat direct în <img>
+        b64 = img.data[0].b64_json
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Eroare la generarea imaginii: {e}")
 
