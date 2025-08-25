@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Smart Librarian — RAG + TTS/STT + Images + Streaming + Sessions</title>
+  <title>Smart Librarian — RAG + Streaming + Sessions + Images + TTS</title>
   <style>
     :root {
       --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
@@ -35,6 +35,8 @@
     .typing { color:var(--muted); font-style:italic; margin-left:46px; }
     .imgwrap { margin:8px 0 0 46px; }
     .imgwrap img { width: 320px; height: auto; border-radius:12px; border:1px solid var(--border); display:block; }
+    .audio-bar { margin-top: 6px; margin-left:46px; }
+    .hidden { display:none; }
   </style>
 </head>
 <body>
@@ -43,10 +45,10 @@
     <div class="avatar">📚</div>
     <div class="brand">Smart Librarian</div>
     <span class="pill">RAG + Tool</span>
-    <span class="pill">TTS/STT</span>
-    <span class="pill">Images</span>
     <span class="pill">Streaming</span>
     <span class="pill">Sessions</span>
+    <span class="pill">Images</span>
+    <span class="pill">TTS (browser/server)</span>
   </div>
 
   <div id="chat" class="chat"></div>
@@ -55,20 +57,23 @@
     <textarea id="input" class="input" placeholder="Scrie sau apasă 🎙️ pentru voce..."></textarea>
     <div class="row">
       <button id="micBtn" class="btn" title="Voice input (STT)">🎙️<span class="lbl">Start</span></button>
-      <button id="speakToggle" class="btn" title="Citește automat răspunsurile (TTS)">🔊 Auto</button>
+      <button id="speakToggle" class="btn" title="Citește automat răspunsuri cu TTS din browser">🔊 Auto</button>
+      <button id="serverSpeakToggle" class="btn" title="Citește automat răspunsuri cu TTS de pe server">🛰️ Server TTS</button>
       <button id="autoImgToggle" class="btn" title="Generează automat imagine pentru fiecare răspuns">🖼️ Auto</button>
       <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
       <button id="clearBtn" class="btn" title="Începe conversație nouă">🗑️ New chat</button>
     </div>
-    <!-- TTS: selector de voce -->
+    <!-- TTS (browser) selector de voce -->
     <div class="row" style="margin-top:8px">
-      <label class="switch">Voce:
+      <label class="switch">Voce browser:
         <select id="voiceSelect"></select>
       </label>
     </div>
   </div>
 
-  <div class="footer">Conversațiile sunt păstrate pe sesiuni (localStorage). „New chat” creează un session nou.</div>
+  <audio id="ttsAudio" class="audio-bar hidden" controls></audio>
+
+  <div class="footer">Activează <b>🔊 Auto</b> pentru TTS din browser sau <b>🛰️ Server TTS</b> pentru TTS de pe server (calitate mai stabilă). Doar unul poate fi activ simultan.</div>
 </div>
 
 <script>
@@ -76,7 +81,6 @@
   const SESSION_KEY = 'sl_session_id';
   function newSessionId() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-    // fallback
     return 'sess-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
   function getSessionId() {
@@ -98,10 +102,13 @@
   const clearBtn = document.getElementById('clearBtn');
   const micBtn = document.getElementById('micBtn');
   const speakToggle = document.getElementById('speakToggle');
+  const serverSpeakToggle = document.getElementById('serverSpeakToggle');
   const autoImgToggle = document.getElementById('autoImgToggle');
   const voiceSelect = document.getElementById('voiceSelect');
+  const audioEl = document.getElementById('ttsAudio');
 
-  let autoSpeak = false;
+  let autoSpeak = false;        // browser TTS
+  let autoSpeakServer = false;  // server TTS
   let autoImage = false;
   let recognizing = false;
   let recognition = null;
@@ -137,11 +144,14 @@
 
     chatEl.scrollTop = chatEl.scrollHeight;
 
-    if (role === 'assistant' && autoSpeak && 'speechSynthesis' in window) {
-      speak(text);
-    }
-    if (role === 'assistant' && autoImage) {
-      generateImageForMessage(row, text);
+    // Auto-voice
+    if (role === 'assistant') {
+      if (autoSpeakServer) {
+        stopBrowserTTS();
+        speakServer(text);
+      } else if (autoSpeak && 'speechSynthesis' in window) {
+        speak(text);
+      }
     }
   }
 
@@ -172,7 +182,7 @@
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
-  // ====== TTS helpers ======
+  // ====== TTS (browser) ======
   function splitIntoChunks(text, maxLen = 180) {
     const parts = [];
     const sentences = text
@@ -228,16 +238,10 @@
       localStorage.setItem('voiceName', target.name);
     }
   }
-  if ('speechSynthesis' in window) {
-    populateVoices();
-    window.speechSynthesis.onvoiceschanged = populateVoices;
+  function stopBrowserTTS() {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   }
-  voiceSelect?.addEventListener('change', () => {
-    localStorage.setItem('voiceName', voiceSelect.value);
-  });
-
   function speak(text) {
-    if (!('speechSynthesis' in window)) return;
     const synth = window.speechSynthesis; synth.cancel();
     const chosenName = voiceSelect?.value || localStorage.getItem('voiceName');
     const voices = synth.getVoices();
@@ -257,6 +261,57 @@
     };
     speakNext();
   }
+
+  // ====== TTS (server) ======
+  let serverQueue = [];
+  let serverPlaying = false;
+
+  function stopServerTTS() {
+    try { audioEl.pause(); } catch {}
+    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
+    audioEl.removeAttribute('src');
+    audioEl.load();
+    audioEl.classList.add('hidden');
+    serverQueue = [];
+    serverPlaying = false;
+  }
+
+  async function playNextServerChunk() {
+    if (!serverQueue.length) {
+      serverPlaying = false;
+      return;
+    }
+    serverPlaying = true;
+    const piece = serverQueue.shift();
+    try {
+      const res = await fetch('/api/tts', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ text: piece })
+      });
+      if (!res.ok) throw new Error('Eroare TTS server');
+      const blob = await res.blob(); // audio/mpeg
+      const url = URL.createObjectURL(blob);
+      audioEl.src = url;
+      audioEl.classList.remove('hidden');
+      await audioEl.play();
+    } catch (e) {
+      addMessage('assistant', '⚠️ TTS server a eșuat la redare.');
+      serverPlaying = false;
+    }
+  }
+
+  function speakServer(text) {
+    stopServerTTS(); // reset oricare redare anterioară
+    // Fragmentăm puțin textul (redare fluentă + limite sigure)
+    serverQueue = splitIntoChunks(text, 220);
+    playNextServerChunk();
+  }
+
+  audioEl.addEventListener('ended', () => {
+    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
+    playNextServerChunk();
+  });
 
   // ====== STT (Web Speech API) ======
   recognition = (function initSTT(){
@@ -305,12 +360,11 @@
   function sendStreaming(text) {
     const sid = getSessionId();
 
-    // adaugă mesajul userului
     addMessage('user', text);
     const { row, bub } = addAssistantPlaceholder();
     setTyping(true);
 
-    let acc = ''; // acumulăm răspunsul final
+    let acc = '';
     let es;
     try {
       if (!window.EventSource) throw new Error('EventSource not supported');
@@ -334,8 +388,10 @@
           imgBtn.onclick = () => generateImageForMessage(row, acc);
           actions.appendChild(imgBtn);
           chatEl.appendChild(actions);
-          if (autoSpeak) speak(acc);
+          // auto image/TTS după final
           if (autoImage) generateImageForMessage(row, acc);
+          if (autoSpeakServer) { stopBrowserTTS(); speakServer(acc); }
+          else if (autoSpeak) { speak(acc); }
           return;
         }
         try {
@@ -368,8 +424,9 @@
         imgBtn.onclick = () => generateImageForMessage(row, ans);
         actions.appendChild(imgBtn);
         chatEl.appendChild(actions);
-        if (autoSpeak && ans) speak(ans);
         if (autoImage && ans) generateImageForMessage(row, ans);
+        if (autoSpeakServer && ans) { stopBrowserTTS(); speakServer(ans); }
+        else if (autoSpeak && ans) { speak(ans); }
       }).catch(() => {
         setTyping(false);
         addMessage('assistant', '⚠️ Eroare la /api/chat.');
@@ -390,11 +447,10 @@
   });
 
   clearBtn.onclick = async () => {
-    // New chat = nou session_id + opțional curățare pe server
-    const { oldSid, newSid } = rotateSessionId();
+    const { oldSid } = rotateSessionId();
     chatEl.innerHTML = '';
-    window.speechSynthesis && window.speechSynthesis.cancel();
-    // opțional: anunță serverul să șteargă istoricul vechi
+    stopBrowserTTS();
+    stopServerTTS();
     try {
       await fetch('/api/session/reset', {
         method:'POST',
@@ -406,17 +462,40 @@
 
   speakToggle.onclick = () => {
     autoSpeak = !autoSpeak;
+    if (autoSpeak) { // dezactivăm server TTS dacă era activ
+      autoSpeakServer = false;
+      serverSpeakToggle.style.borderColor = 'var(--border)';
+      serverSpeakToggle.style.color = 'var(--fg)';
+      stopServerTTS();
+    }
     speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
     speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
+    localStorage.setItem('sl_autoSpeak', autoSpeak ? '1' : '0');
+  };
+
+  serverSpeakToggle.onclick = () => {
+    autoSpeakServer = !autoSpeakServer;
+    if (autoSpeakServer) { // dezactivăm browser TTS dacă era activ
+      autoSpeak = false;
+      speakToggle.style.borderColor = 'var(--border)';
+      speakToggle.style.color = 'var(--fg)';
+      stopBrowserTTS();
+    } else {
+      stopServerTTS();
+    }
+    serverSpeakToggle.style.borderColor = autoSpeakServer ? 'var(--accent)' : 'var(--border)';
+    serverSpeakToggle.style.color = autoSpeakServer ? 'white' : 'var(--fg)';
+    localStorage.setItem('sl_autoSpeakServer', autoSpeakServer ? '1' : '0');
   };
 
   autoImgToggle.onclick = () => {
     autoImage = !autoImage;
     autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
     autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
+    localStorage.setItem('sl_autoImg', autoImage ? '1' : '0');
   };
 
-  // initialize voices
+  // initialize browser voices + restore toggles
   if ('speechSynthesis' in window) {
     populateVoices();
     window.speechSynthesis.onvoiceschanged = populateVoices;
@@ -424,6 +503,16 @@
   voiceSelect?.addEventListener('change', () => {
     localStorage.setItem('voiceName', voiceSelect.value);
   });
+  // Persist toggle states
+  autoSpeak = localStorage.getItem('sl_autoSpeak') === '1';
+  autoSpeakServer = localStorage.getItem('sl_autoSpeakServer') === '1';
+  autoImage = localStorage.getItem('sl_autoImg') === '1';
+  speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
+  speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
+  serverSpeakToggle.style.borderColor = autoSpeakServer ? 'var(--accent)' : 'var(--border)';
+  serverSpeakToggle.style.color = autoSpeakServer ? 'white' : 'var(--fg)';
+  autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
+  autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
 </script>
 </body>
 </html>
