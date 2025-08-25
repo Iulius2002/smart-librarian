@@ -4,30 +4,51 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Smart Librarian — RAG + Streaming + Sessions + Images + TTS</title>
+
+  <!-- Markdown + Sanitize -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.3/dist/purify.min.js"></script>
+
   <style>
     :root {
       --bg:#0f172a; --panel:#111827; --muted:#94a3b8; --fg:#e5e7eb; --accent:#22d3ee; --accent-2:#38bdf8;
-      --bubble-user:#1f2937; --bubble-bot:#0b1220; --border:#1f2937;
+      --bubble-user:#1f2937; --bubble-bot:#0b1220; --border:#1f2937; --link:#7dd3fc;
+      --code-bg:#0b1020; --code-border:#1f2a3a;
     }
+    /* Light theme vars */
+    [data-theme="light"]{
+      --bg:#f8fafc; --panel:#ffffff; --muted:#475569; --fg:#0f172a; --accent:#0891b2; --accent-2:#0ea5e9;
+      --bubble-user:#eef2f7; --bubble-bot:#f1f5f9; --border:#e2e8f0; --link:#0284c7;
+      --code-bg:#f3f4f6; --code-border:#e5e7eb;
+    }
+
     * { box-sizing: border-box; }
-    body { margin:0; background: radial-gradient(1200px 600px at 20% -10%, #0b1220, #0f172a 60%), linear-gradient(180deg, #0f172a 0, #0b1020 100%); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
+    body { margin:0; background: radial-gradient(1200px 600px at 20% -10%, #0b1220, var(--bg) 60%), linear-gradient(180deg, var(--bg) 0, var(--bg) 100%); color: var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; }
     .container { max-width: 980px; margin: 0 auto; padding: 24px; }
     .header { display:flex; align-items:center; gap:12px; padding: 8px 0 20px; }
     .brand { font-weight:700; letter-spacing:0.2px; font-size: 22px; }
+    .spacer { flex:1; }
     .pill { border:1px solid var(--border); background: rgba(255,255,255,0.02); color: var(--muted); padding:6px 10px; border-radius:999px; font-size:12px; }
+    .themeBtn { border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); color: var(--fg); padding:8px 10px; border-radius:12px; cursor:pointer; }
     .chat { background: rgba(255,255,255,0.02); border:1px solid var(--border); border-radius:16px; min-height: 60vh; padding:20px; display:flex; flex-direction:column; gap:14px; }
     .msg { display:flex; gap:10px; align-items:flex-start; }
-    .avatar { flex:0 0 36px; height:36px; width:36px; border-radius:8px; display:grid; place-items:center; font-size:18px; background: linear-gradient(135deg, #0ea5e9, #22d3ee); }
+    .avatar { flex:0 0 36px; height:36px; width:36px; border-radius:8px; display:grid; place-items:center; font-size:18px; background: linear-gradient(135deg, #0ea5e9, #22d3ee); color:white; }
     .avatar.user { background: linear-gradient(135deg, #6366f1, #a78bfa); }
-    .bubble { padding:12px 14px; border-radius:12px; border:1px solid var(--border); max-width: 75%; line-height: 1.55; white-space:pre-wrap; }
+    .bubble { padding:12px 14px; border-radius:12px; border:1px solid var(--border); max-width: 75%; line-height: 1.55; white-space:pre-wrap; position: relative; }
     .bubble.user { background: var(--bubble-user); }
     .bubble.bot { background: var(--bubble-bot); }
+    .bubble a { color: var(--link); text-decoration: underline; }
+    .bubble pre { background: var(--code-bg); border:1px solid var(--code-border); padding:10px; overflow:auto; border-radius:10px; }
+    .bubble code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 0.95em; }
     .actions { display:flex; gap:8px; margin:6px 0 0 46px; flex-wrap:wrap; }
-    .sources { margin-top:6px; font-size:12px; color: var(--muted); border-left:3px solid var(--accent-2); padding-left:10px; margin-left:46px; }
+    .btn { border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); color: var(--fg); padding:8px 10px; border-radius:12px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+    .btn:hover { border-color:#334155; }
+    .sources { margin-top:6px; margin-left:46px; }
+    .sources details { border:1px solid var(--border); border-left:3px solid var(--accent-2); border-radius:10px; padding:8px 10px; background: rgba(255,255,255,0.02); }
+    .sources summary { cursor:pointer; color: var(--muted); outline:none; }
+    .sources .item { margin:6px 0 0 0; font-size: 13px; }
     .composer { display:flex; gap:10px; margin-top: 14px; flex-direction:column; }
     .input { flex:1; background: var(--panel); border:1px solid var(--border); color: var(--fg); padding:12px 14px; border-radius:12px; resize:vertical; min-height:48px; max-height: 180px; }
-    .btn { border:1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); color: var(--fg); padding:10px 12px; border-radius:12px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
-    .btn:hover { border-color:#334155; }
     .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .switch { display:inline-flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
     .switch select { background: var(--panel); color: var(--fg); border:1px solid var(--border); border-radius:10px; padding:6px 8px; }
@@ -48,7 +69,9 @@
     <span class="pill">Streaming</span>
     <span class="pill">Sessions</span>
     <span class="pill">Images</span>
-    <span class="pill">TTS (browser/server)</span>
+    <span class="pill">TTS</span>
+    <div class="spacer"></div>
+    <button id="themeBtn" class="themeBtn" title="Light / Dark">🌙</button>
   </div>
 
   <div id="chat" class="chat"></div>
@@ -57,13 +80,12 @@
     <textarea id="input" class="input" placeholder="Scrie sau apasă 🎙️ pentru voce..."></textarea>
     <div class="row">
       <button id="micBtn" class="btn" title="Voice input (STT)">🎙️<span class="lbl">Start</span></button>
-      <button id="speakToggle" class="btn" title="Citește automat răspunsuri cu TTS din browser">🔊 Auto</button>
-      <button id="serverSpeakToggle" class="btn" title="Citește automat răspunsuri cu TTS de pe server">🛰️ Server TTS</button>
+      <button id="speakToggle" class="btn" title="Citește răspunsuri cu TTS din browser">🔊 Auto</button>
+      <button id="serverSpeakToggle" class="btn" title="Citește răspunsuri cu TTS de pe server">🛰️ Server TTS</button>
       <button id="autoImgToggle" class="btn" title="Generează automat imagine pentru fiecare răspuns">🖼️ Auto</button>
-      <button id="sendBtn" class="btn" title="Trimite">➤ Trimite</button>
-      <button id="clearBtn" class="btn" title="Începe conversație nouă">🗑️ New chat</button>
+      <button id="sendBtn" class="btn" title="Trimite (Ctrl/Cmd+Enter)">➤ Trimite</button>
+      <button id="clearBtn" class="btn" title="Începe conversație nouă (Ctrl/Cmd+K)">🗑️ New chat</button>
     </div>
-    <!-- TTS (browser) selector de voce -->
     <div class="row" style="margin-top:8px">
       <label class="switch">Voce browser:
         <select id="voiceSelect"></select>
@@ -73,7 +95,9 @@
 
   <audio id="ttsAudio" class="audio-bar hidden" controls></audio>
 
-  <div class="footer">Activează <b>🔊 Auto</b> pentru TTS din browser sau <b>🛰️ Server TTS</b> pentru TTS de pe server (calitate mai stabilă). Doar unul poate fi activ simultan.</div>
+  <div class="footer">
+    Scurtături: <b>Ctrl/Cmd+Enter</b> trimite • <b>Ctrl/Cmd+K</b> new chat • <b>Esc</b> oprește TTS.
+  </div>
 </div>
 
 <script>
@@ -83,17 +107,14 @@
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
     return 'sess-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   }
-  function getSessionId() {
-    let sid = localStorage.getItem(SESSION_KEY);
-    if (!sid) { sid = newSessionId(); localStorage.setItem(SESSION_KEY, sid); }
-    return sid;
-  }
-  function rotateSessionId() {
-    const oldSid = localStorage.getItem(SESSION_KEY);
-    const newSid = newSessionId();
-    localStorage.setItem(SESSION_KEY, newSid);
-    return { oldSid, newSid };
-  }
+  function getSessionId() { let sid = localStorage.getItem(SESSION_KEY); if (!sid) { sid = newSessionId(); localStorage.setItem(SESSION_KEY, sid); } return sid; }
+  function rotateSessionId() { const oldSid = localStorage.getItem(SESSION_KEY); const newSid = newSessionId(); localStorage.setItem(SESSION_KEY, newSid); return { oldSid, newSid }; }
+
+  // ====== Theme ======
+  const themeBtn = document.getElementById('themeBtn');
+  function applyTheme(t){ document.documentElement.setAttribute('data-theme', t); themeBtn.textContent = t==='light' ? '🌚' : '🌙'; localStorage.setItem('sl_theme', t); }
+  applyTheme(localStorage.getItem('sl_theme') || 'dark');
+  themeBtn.onclick = () => applyTheme((localStorage.getItem('sl_theme') || 'dark') === 'dark' ? 'light' : 'dark');
 
   // ====== Elements & State ======
   const chatEl = document.getElementById('chat');
@@ -107,51 +128,58 @@
   const voiceSelect = document.getElementById('voiceSelect');
   const audioEl = document.getElementById('ttsAudio');
 
-  let autoSpeak = false;        // browser TTS
-  let autoSpeakServer = false;  // server TTS
-  let autoImage = false;
+  let autoSpeak = localStorage.getItem('sl_autoSpeak') === '1';
+  let autoSpeakServer = localStorage.getItem('sl_autoSpeakServer') === '1';
+  let autoImage = localStorage.getItem('sl_autoImg') === '1';
   let recognizing = false;
   let recognition = null;
 
-  // ====== UI Helpers ======
-  function el(tag, cls, text) {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (text !== undefined) e.textContent = text;
-    return e;
+  speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
+  speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
+  serverSpeakToggle.style.borderColor = autoSpeakServer ? 'var(--accent)' : 'var(--border)';
+  serverSpeakToggle.style.color = autoSpeakServer ? 'white' : 'var(--fg)';
+  autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
+  autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
+
+  // ====== Helpers ======
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function renderMarkdownTo(node, text) {
+    try {
+      const html = DOMPurify.sanitize(marked.parse(text || ''), {USE_PROFILES: {html: true}});
+      node.innerHTML = html;
+    } catch { node.textContent = text; }
   }
 
   function addMessage(role, text, sources=null) {
     const row = el('div', 'msg');
     const av = el('div', 'avatar ' + (role==='user'?'user':''), role==='user'?'🙂':'🤖');
     const bub = el('div', 'bubble ' + (role==='user'?'user':'bot'));
-    bub.textContent = text;
+    // user: plain text; assistant: markdown
+    if (role === 'assistant') renderMarkdownTo(bub, text); else bub.textContent = text;
+    bub.dataset.original = text || '';
     row.appendChild(av);
     row.appendChild(bub);
     chatEl.appendChild(row);
 
+    // actions
+    const actions = el('div','actions');
+    const copyBtn = el('button','btn','📋 Copy');
+    copyBtn.onclick = async () => { try { await navigator.clipboard.writeText(bub.dataset.original || ''); copyBtn.textContent='✅ Copiat'; setTimeout(()=>copyBtn.textContent='📋 Copy',1200);} catch{} };
+    actions.appendChild(copyBtn);
     if (role === 'assistant') {
-      const actions = el('div','actions');
       const imgBtn = el('button','btn','🎨 Imagine');
-      imgBtn.onclick = () => generateImageForMessage(row, text);
+      imgBtn.onclick = () => generateImageForMessage(row, bub.dataset.original || '');
       actions.appendChild(imgBtn);
-      chatEl.appendChild(actions);
     }
+    chatEl.appendChild(actions);
 
-    if (role==='assistant' && sources && sources.length) {
-      appendSources(sources);
-    }
-
+    if (role==='assistant' && sources && sources.length) appendSources(sources);
     chatEl.scrollTop = chatEl.scrollHeight;
 
-    // Auto-voice
     if (role === 'assistant') {
-      if (autoSpeakServer) {
-        stopBrowserTTS();
-        speakServer(text);
-      } else if (autoSpeak && 'speechSynthesis' in window) {
-        speak(text);
-      }
+      if (autoSpeakServer) { stopBrowserTTS(); speakServer(bub.dataset.original || ''); }
+      else if (autoSpeak && 'speechSynthesis' in window) { speak(bub.dataset.original || ''); }
+      if (autoImage) generateImageForMessage(row, bub.dataset.original || '');
     }
   }
 
@@ -159,209 +187,101 @@
     const row = el('div', 'msg');
     const av = el('div', 'avatar', '🤖');
     const bub = el('div', 'bubble bot');
-    row.appendChild(av);
-    row.appendChild(bub);
-    chatEl.appendChild(row);
-    chatEl.scrollTop = chatEl.scrollHeight;
-    return { row, bub };
+    row.appendChild(av); row.appendChild(bub); chatEl.appendChild(row); chatEl.scrollTop = chatEl.scrollHeight;
+    // acțiuni apărute la final
+    const actions = el('div','actions'); chatEl.appendChild(actions);
+    return { row, bub, actions };
   }
 
   function appendSources(sources) {
-    const src = el('div','sources');
-    src.textContent = 'Sources: ' + sources.map(s => `${s.title}`).join(' • ');
-    chatEl.appendChild(src);
+    const wrap = el('div','sources');
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = `Surse (${sources.length})`;
+    det.appendChild(sum);
+    (sources || []).forEach(s => {
+      const it = el('div','item');
+      const title = s.title || 'N/A';
+      const prev = (s.preview || '').trim();
+      it.innerHTML = `<b>${title}</b>${prev ? ` — <span style="color:var(--muted)">${prev}</span>` : ''}`;
+      det.appendChild(it);
+    });
+    wrap.appendChild(det);
+    chatEl.appendChild(wrap);
   }
 
   function setTyping(on) {
     let t = document.getElementById('typing');
-    if (on) {
-      if (!t) { t = el('div','typing'); t.id='typing'; t.textContent='Asistentul scrie...'; chatEl.appendChild(t); }
-    } else {
-      if (t) t.remove();
-    }
+    if (on) { if (!t) { t = el('div','typing'); t.id='typing'; t.textContent='Asistentul scrie...'; chatEl.appendChild(t); } }
+    else { if (t) t.remove(); }
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
   // ====== TTS (browser) ======
   function splitIntoChunks(text, maxLen = 180) {
     const parts = [];
-    const sentences = text
-      .replace(/\s+/g,' ')
-      .split(/([\.!\?;:])\s+/)
-      .reduce((acc, cur) => {
-        if (!acc.length) { acc.push(''); }
-        if (/^[\.!\?;:]$/.test(cur)) acc[acc.length-1] += cur;
-        else if (cur.trim()) acc.push(cur.trim());
-        return acc;
-      }, []).filter(Boolean);
-    let buf = '';
-    for (const s of sentences) {
-      if ((buf + ' ' + s).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + s;
-      else {
-        if (buf) parts.push(buf);
-        if (s.length > maxLen) {
-          const chunks = s.split(/, /); let b = '';
-          for (const c of chunks) {
-            if ((b + ', ' + c).length <= maxLen) b = (b ? b + ', ' : '') + c;
-            else { if (b) parts.push(b); b = c; }
-          }
-          if (b) parts.push(b);
-          buf = '';
-        } else buf = s;
-      }
-    }
-    if (buf) parts.push(buf);
-    return parts;
+    const sentences = (text||'').replace(/\s+/g,' ').split(/([\.!\?;:])\s+/).reduce((acc, cur) => { if (!acc.length) acc.push(''); if (/^[\.!\?;:]$/.test(cur)) acc[acc.length-1]+=cur; else if (cur.trim()) acc.push(cur.trim()); return acc; }, []).filter(Boolean);
+    let buf = ''; for (const s of sentences) { if ((buf + ' ' + s).trim().length <= maxLen) buf = (buf ? buf + ' ' : '') + s; else { if (buf) parts.push(buf); if (s.length > maxLen) { const chunks = s.split(/, /); let b = ''; for (const c of chunks) { if ((b + ', ' + c).length <= maxLen) b = (b ? b + ', ' : '') + c; else { if (b) parts.push(b); b = c; } } if (b) parts.push(b); buf=''; } else buf = s; } } if (buf) parts.push(buf); return parts;
   }
-
   function populateVoices() {
     if (!('speechSynthesis' in window)) return;
     const all = window.speechSynthesis.getVoices() || [];
-    const sorted = all.slice().sort((a,b) => {
-      const ar = (a.lang||'').toLowerCase().startsWith('ro') ? -1 : 1;
-      const br = (b.lang||'').toLowerCase().startsWith('ro') ? -1 : 1;
-      if (ar !== br) return ar - br;
-      return (a.name || '').localeCompare(b.name || '');
-    });
-    voiceSelect.innerHTML = '';
-    sorted.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.name;
-      opt.textContent = `${v.name} — ${v.lang}`;
-      voiceSelect.appendChild(opt);
-    });
-    const saved = localStorage.getItem('voiceName');
-    const preferRo = sorted.find(v => (v.lang||'').toLowerCase().startsWith('ro'));
-    const target = sorted.find(v => v.name === saved) || preferRo || sorted[0];
-    if (target) {
-      voiceSelect.value = target.name;
-      localStorage.setItem('voiceName', target.name);
-    }
+    const sorted = all.slice().sort((a,b) => { const ar = (a.lang||'').toLowerCase().startsWith('ro') ? -1 : 1; const br = (b.lang||'').toLowerCase().startsWith('ro') ? -1 : 1; if (ar !== br) return ar - br; return (a.name || '').localeCompare(b.name || ''); });
+    voiceSelect.innerHTML = ''; sorted.forEach(v => { const opt = document.createElement('option'); opt.value = v.name; opt.textContent = `${v.name} — ${v.lang}`; voiceSelect.appendChild(opt); });
+    const saved = localStorage.getItem('voiceName'); const preferRo = sorted.find(v => (v.lang||'').toLowerCase().startsWith('ro')); const target = sorted.find(v => v.name === saved) || preferRo || sorted[0];
+    if (target) { voiceSelect.value = target.name; localStorage.setItem('voiceName', target.name); }
   }
-  function stopBrowserTTS() {
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  }
+  function stopBrowserTTS(){ if ('speechSynthesis' in window) window.speechSynthesis.cancel(); }
   function speak(text) {
     const synth = window.speechSynthesis; synth.cancel();
     const chosenName = voiceSelect?.value || localStorage.getItem('voiceName');
     const voices = synth.getVoices();
-    let voice = voices.find(v => v.name === chosenName)
-             || voices.find(v => (v.lang||'').toLowerCase().startsWith('ro'))
-             || voices[0];
-    const rate = 1.0, pitch = 1.0;
-    const queue = splitIntoChunks(text, 180);
-    const speakNext = () => {
-      if (!queue.length) return;
-      const u = new SpeechSynthesisUtterance(queue.shift());
-      u.voice = voice || null;
-      u.lang = (voice && voice.lang) ? voice.lang : 'ro-RO';
-      u.rate = rate; u.pitch = pitch;
-      u.onend = () => speakNext();
-      synth.speak(u);
-    };
+    let voice = voices.find(v => v.name === chosenName) || voices.find(v => (v.lang||'').toLowerCase().startsWith('ro')) || voices[0];
+    const rate = 1.0, pitch = 1.0; const queue = splitIntoChunks(text, 180);
+    const speakNext = () => { if (!queue.length) return; const u = new SpeechSynthesisUtterance(queue.shift()); u.voice = voice || null; u.lang = (voice && voice.lang) ? voice.lang : 'ro-RO'; u.rate = rate; u.pitch = pitch; u.onend = () => speakNext(); synth.speak(u); };
     speakNext();
   }
 
   // ====== TTS (server) ======
-  let serverQueue = [];
-  let serverPlaying = false;
-
-  function stopServerTTS() {
-    try { audioEl.pause(); } catch {}
-    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
-    audioEl.removeAttribute('src');
-    audioEl.load();
-    audioEl.classList.add('hidden');
-    serverQueue = [];
-    serverPlaying = false;
-  }
-
+  let serverQueue = []; let serverPlaying = false;
+  function stopServerTTS(){ try { audioEl.pause(); } catch {} if (audioEl.src) URL.revokeObjectURL(audioEl.src); audioEl.removeAttribute('src'); audioEl.load(); audioEl.classList.add('hidden'); serverQueue = []; serverPlaying = false; }
   async function playNextServerChunk() {
-    if (!serverQueue.length) {
-      serverPlaying = false;
-      return;
-    }
-    serverPlaying = true;
-    const piece = serverQueue.shift();
+    if (!serverQueue.length) { serverPlaying = false; return; }
+    serverPlaying = true; const piece = serverQueue.shift();
     try {
-      const res = await fetch('/api/tts', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ text: piece })
-      });
+      const res = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: piece }) });
       if (!res.ok) throw new Error('Eroare TTS server');
-      const blob = await res.blob(); // audio/mpeg
-      const url = URL.createObjectURL(blob);
-      audioEl.src = url;
-      audioEl.classList.remove('hidden');
-      await audioEl.play();
-    } catch (e) {
-      addMessage('assistant', '⚠️ TTS server a eșuat la redare.');
-      serverPlaying = false;
-    }
+      const blob = await res.blob(); const url = URL.createObjectURL(blob);
+      audioEl.src = url; audioEl.classList.remove('hidden'); await audioEl.play();
+    } catch { addMessage('assistant', '⚠️ TTS server a eșuat la redare.'); serverPlaying = false; }
   }
-
-  function speakServer(text) {
-    stopServerTTS(); // reset oricare redare anterioară
-    // Fragmentăm puțin textul (redare fluentă + limite sigure)
-    serverQueue = splitIntoChunks(text, 220);
-    playNextServerChunk();
-  }
-
-  audioEl.addEventListener('ended', () => {
-    if (audioEl.src) URL.revokeObjectURL(audioEl.src);
-    playNextServerChunk();
-  });
+  function speakServer(text) { stopServerTTS(); serverQueue = splitIntoChunks(text, 220); playNextServerChunk(); }
+  audioEl.addEventListener('ended', () => { if (audioEl.src) URL.revokeObjectURL(audioEl.src); playNextServerChunk(); });
 
   // ====== STT (Web Speech API) ======
-  recognition = (function initSTT(){
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
-    const r = new SR();
-    r.lang = 'ro-RO'; r.interimResults = false; r.maxAlternatives = 1;
-    r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; };
-    r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
-    r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; };
-    return r;
-  })();
+  recognition = (function initSTT(){ const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return null; const r = new SR(); r.lang = 'ro-RO'; r.interimResults = false; r.maxAlternatives = 1; r.onresult = (ev) => { inputEl.value = ev.results[0][0].transcript; }; r.onend = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; }; r.onerror = () => { recognizing = false; micBtn.querySelector('.lbl').textContent = 'Start'; micBtn.disabled = false; }; return r; })();
 
-  // ====== Image Generation (client) ======
+  // ====== Images ======
   async function generateImageForMessage(rowEl, assistantText) {
-    const loader = el('div','typing'); loader.textContent = 'Se generează imaginea...';
-    chatEl.appendChild(loader); chatEl.scrollTop = chatEl.scrollHeight;
-
+    const loader = el('div','typing'); loader.textContent = 'Se generează imaginea...'; chatEl.appendChild(loader); chatEl.scrollTop = chatEl.scrollHeight;
     try {
-      const res = await fetch('/api/image', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ text: assistantText })
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(()=>({detail:'Eroare la server'}));
-        addMessage('assistant', `⚠️ ${e.detail || 'Eroare la generarea imaginii'}`);
-        loader.remove(); return;
-      }
+      const res = await fetch('/api/image', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: assistantText }) });
+      if (!res.ok) { const e = await res.json().catch(()=>({detail:'Eroare la server'})); addMessage('assistant', `⚠️ ${e.detail || 'Eroare la generarea imaginii'}`); loader.remove(); return; }
       const data = await res.json();
-      const wrap = el('div','imgwrap');
-      const img = new Image();
-      img.src = 'data:image/png;base64,' + data.image_b64;
-      img.alt = data.title || 'Copertă';
-      wrap.appendChild(img);
-      chatEl.appendChild(wrap);
-      chatEl.scrollTop = chatEl.scrollHeight;
-    } catch (err) {
-      addMessage('assistant', '⚠️ Nu am reușit să generez imaginea.');
-    } finally {
-      loader.remove();
-    }
+      const wrap = el('div','imgwrap'); const img = new Image(); img.src = 'data:image/png;base64,' + data.image_b64; img.alt = data.title || 'Copertă'; wrap.appendChild(img); chatEl.appendChild(wrap); chatEl.scrollTop = chatEl.scrollHeight;
+    } catch { addMessage('assistant', '⚠️ Nu am reușit să generez imaginea.'); }
+    finally { loader.remove(); }
   }
 
   // ====== Streaming (SSE) + Sessions ======
   function sendStreaming(text) {
     const sid = getSessionId();
 
-    addMessage('user', text);
-    const { row, bub } = addAssistantPlaceholder();
+    // user message
+    const userRow = el('div','msg'); const userAv = el('div','avatar user','🙂'); const userBub = el('div','bubble user'); userBub.textContent = text; userRow.appendChild(userAv); userRow.appendChild(userBub); chatEl.appendChild(userRow);
+    const userActions = el('div','actions'); const userCopy = el('button','btn','📋 Copy'); userCopy.onclick = async ()=>{await navigator.clipboard.writeText(text); userCopy.textContent='✅ Copiat'; setTimeout(()=>userCopy.textContent='📋 Copy',1200);}; userActions.appendChild(userCopy); chatEl.appendChild(userActions);
+
+    const { bub, actions } = addAssistantPlaceholder();
     setTyping(true);
 
     let acc = '';
@@ -371,123 +291,77 @@
       es = new EventSource(`/api/chat/stream?q=${encodeURIComponent(text)}&sid=${encodeURIComponent(sid)}`);
 
       es.addEventListener('sources', (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          if (data && data.sources && data.sources.length) {
-            appendSources(data.sources);
-          }
-        } catch {}
+        try { const data = JSON.parse(ev.data); if (data && data.sources && data.sources.length) appendSources(data.sources); } catch {}
       });
 
       es.onmessage = (ev) => {
         setTyping(false);
         if (ev.data === '[DONE]') {
           es.close();
-          const actions = el('div','actions');
-          const imgBtn = el('button','btn','🎨 Imagine');
-          imgBtn.onclick = () => generateImageForMessage(row, acc);
-          actions.appendChild(imgBtn);
-          chatEl.appendChild(actions);
-          // auto image/TTS după final
-          if (autoImage) generateImageForMessage(row, acc);
+          // finalize bubble (markdown)
+          bub.dataset.original = acc; renderMarkdownTo(bub, acc);
+          // actions
+          const copyBtn = el('button','btn','📋 Copy'); copyBtn.onclick = async ()=>{await navigator.clipboard.writeText(acc); copyBtn.textContent='✅ Copiat'; setTimeout(()=>copyBtn.textContent='📋 Copy',1200);};
+          const imgBtn = el('button','btn','🎨 Imagine'); imgBtn.onclick = () => generateImageForMessage(bub.parentElement, acc);
+          actions.appendChild(copyBtn); actions.appendChild(imgBtn);
+          // auto
+          if (autoImage) generateImageForMessage(bub.parentElement, acc);
           if (autoSpeakServer) { stopBrowserTTS(); speakServer(acc); }
           else if (autoSpeak) { speak(acc); }
           return;
         }
-        try {
-          const data = JSON.parse(ev.data);
-          const delta = data.delta || '';
-          acc += (acc ? ' ' : '') + delta;
-          bub.textContent = acc;
-          chatEl.scrollTop = chatEl.scrollHeight;
-        } catch {}
+        try { const data = JSON.parse(ev.data); const delta = data.delta || ''; acc += (acc ? ' ' : '') + delta; renderMarkdownTo(bub, acc); chatEl.scrollTop = chatEl.scrollHeight; } catch {}
       };
 
-      es.onerror = () => {
-        setTyping(false);
-        es && es.close();
-        addMessage('assistant', '⚠️ Conexiunea de streaming a fost întreruptă. Reîncercă.');
-      };
+      es.onerror = () => { setTyping(false); es && es.close(); addMessage('assistant', '⚠️ Conexiunea de streaming a fost întreruptă. Reîncercă.'); };
     } catch (e) {
-      // Fallback: non-stream
+      // fallback non-stream
       setTyping(true);
-      fetch('/api/chat', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({message: text, session_id: sid})
-      }).then(r => r.json()).then(data => {
-        setTyping(false);
-        const ans = data.answer || '—';
-        bub.textContent = ans;
-        if (data.sources && data.sources.length) appendSources(data.sources);
-        const actions = el('div','actions');
-        const imgBtn = el('button','btn','🎨 Imagine');
-        imgBtn.onclick = () => generateImageForMessage(row, ans);
-        actions.appendChild(imgBtn);
-        chatEl.appendChild(actions);
-        if (autoImage && ans) generateImageForMessage(row, ans);
-        if (autoSpeakServer && ans) { stopBrowserTTS(); speakServer(ans); }
-        else if (autoSpeak && ans) { speak(ans); }
-      }).catch(() => {
-        setTyping(false);
-        addMessage('assistant', '⚠️ Eroare la /api/chat.');
-      });
+      fetch('/api/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: text, session_id: sid}) })
+        .then(r => r.json()).then(data => {
+          setTyping(false);
+          const ans = data.answer || '—'; bub.dataset.original = ans; renderMarkdownTo(bub, ans);
+          const copyBtn = el('button','btn','📋 Copy'); copyBtn.onclick = async ()=>{await navigator.clipboard.writeText(ans); copyBtn.textContent='✅ Copiat'; setTimeout(()=>copyBtn.textContent='📋 Copy',1200);};
+          const imgBtn = el('button','btn','🎨 Imagine'); imgBtn.onclick = () => generateImageForMessage(bub.parentElement, ans);
+          actions.appendChild(copyBtn); actions.appendChild(imgBtn);
+          if (data.sources && data.sources.length) appendSources(data.sources);
+          if (autoImage && ans) generateImageForMessage(bub.parentElement, ans);
+          if (autoSpeakServer && ans) { stopBrowserTTS(); speakServer(ans); }
+          else if (autoSpeak && ans) { speak(ans); }
+        }).catch(()=>{ setTyping(false); addMessage('assistant', '⚠️ Eroare la /api/chat.'); });
     }
   }
 
-  // ====== Events ======
-  sendBtn.onclick = () => {
-    const text = inputEl.value.trim();
-    if (!text) return;
-    inputEl.value = '';
-    sendStreaming(text);
-  };
-
-  inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
+  // ====== Events & Shortcuts ======
+  sendBtn.onclick = () => { const text = inputEl.value.trim(); if (!text) return; inputEl.value = ''; sendStreaming(text); };
+  inputEl.addEventListener('keydown', (e) => { if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); sendBtn.click(); } });
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); clearBtn.click(); }
+    if (e.key === 'Escape') { stopBrowserTTS(); stopServerTTS(); }
   });
 
   clearBtn.onclick = async () => {
     const { oldSid } = rotateSessionId();
-    chatEl.innerHTML = '';
-    stopBrowserTTS();
-    stopServerTTS();
-    try {
-      await fetch('/api/session/reset', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ session_id: oldSid })
-      });
-    } catch {}
+    chatEl.innerHTML = ''; stopBrowserTTS(); stopServerTTS();
+    try { await fetch('/api/session/reset', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ session_id: oldSid }) }); } catch {}
   };
 
+  // toggles
   speakToggle.onclick = () => {
     autoSpeak = !autoSpeak;
-    if (autoSpeak) { // dezactivăm server TTS dacă era activ
-      autoSpeakServer = false;
-      serverSpeakToggle.style.borderColor = 'var(--border)';
-      serverSpeakToggle.style.color = 'var(--fg)';
-      stopServerTTS();
-    }
+    if (autoSpeak) { autoSpeakServer = false; serverSpeakToggle.style.borderColor='var(--border)'; serverSpeakToggle.style.color='var(--fg)'; stopServerTTS(); }
     speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
     speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
-    localStorage.setItem('sl_autoSpeak', autoSpeak ? '1' : '0');
+    localStorage.setItem('sl_autoSpeak','1'); if (!autoSpeak) localStorage.setItem('sl_autoSpeak','0');
   };
-
   serverSpeakToggle.onclick = () => {
     autoSpeakServer = !autoSpeakServer;
-    if (autoSpeakServer) { // dezactivăm browser TTS dacă era activ
-      autoSpeak = false;
-      speakToggle.style.borderColor = 'var(--border)';
-      speakToggle.style.color = 'var(--fg)';
-      stopBrowserTTS();
-    } else {
-      stopServerTTS();
-    }
+    if (autoSpeakServer) { autoSpeak = false; speakToggle.style.borderColor='var(--border)'; speakToggle.style.color='var(--fg)'; stopBrowserTTS(); }
+    else { stopServerTTS(); }
     serverSpeakToggle.style.borderColor = autoSpeakServer ? 'var(--accent)' : 'var(--border)';
     serverSpeakToggle.style.color = autoSpeakServer ? 'white' : 'var(--fg)';
     localStorage.setItem('sl_autoSpeakServer', autoSpeakServer ? '1' : '0');
   };
-
   autoImgToggle.onclick = () => {
     autoImage = !autoImage;
     autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
@@ -495,24 +369,9 @@
     localStorage.setItem('sl_autoImg', autoImage ? '1' : '0');
   };
 
-  // initialize browser voices + restore toggles
-  if ('speechSynthesis' in window) {
-    populateVoices();
-    window.speechSynthesis.onvoiceschanged = populateVoices;
-  }
-  voiceSelect?.addEventListener('change', () => {
-    localStorage.setItem('voiceName', voiceSelect.value);
-  });
-  // Persist toggle states
-  autoSpeak = localStorage.getItem('sl_autoSpeak') === '1';
-  autoSpeakServer = localStorage.getItem('sl_autoSpeakServer') === '1';
-  autoImage = localStorage.getItem('sl_autoImg') === '1';
-  speakToggle.style.borderColor = autoSpeak ? 'var(--accent)' : 'var(--border)';
-  speakToggle.style.color = autoSpeak ? 'white' : 'var(--fg)';
-  serverSpeakToggle.style.borderColor = autoSpeakServer ? 'var(--accent)' : 'var(--border)';
-  serverSpeakToggle.style.color = autoSpeakServer ? 'white' : 'var(--fg)';
-  autoImgToggle.style.borderColor = autoImage ? 'var(--accent)' : 'var(--border)';
-  autoImgToggle.style.color = autoImage ? 'white' : 'var(--fg)';
+  // init voices
+  if ('speechSynthesis' in window) { populateVoices(); window.speechSynthesis.onvoiceschanged = populateVoices; }
+  voiceSelect?.addEventListener('change', () => { localStorage.setItem('voiceName', voiceSelect.value); });
 </script>
 </body>
 </html>
