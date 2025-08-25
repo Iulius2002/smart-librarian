@@ -15,13 +15,18 @@ from typing import List, Dict, Optional, Tuple
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from openai import OpenAI
 
 from .chat import chat_once, build_context_snippets
 from .moderation import contains_profanity
-from .config import OPENAI_API_KEY, IMAGE_MODEL, TTS_MODEL, STT_MODEL
+from .config import (
+    OPENAI_API_KEY, IMAGE_MODEL, TTS_MODEL, STT_MODEL,
+    ALLOWED_ORIGINS, MAX_PROMPT_CHARS, MAX_TTS_CHARS, MAX_STT_MB,
+    REQUIRE_CSRF, CSRF_TOKEN
+)
 
 # ---------- OpenAI client ----------
 client = OpenAI(api_key=OPENAI_API_KEY or None)
@@ -29,6 +34,33 @@ client = OpenAI(api_key=OPENAI_API_KEY or None)
 # ---------- App & templates ----------
 app = FastAPI(title="Smart Librarian")
 templates = Jinja2Templates(directory="src/templates")
+
+# ---------- CORS ----------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS or ["*"],   # dacă vrei strict, setează ALLOWED_ORIGINS în .env
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------- Security headers ----------
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Permissions-Policy"] = "geolocation=(), microphone=*, camera=()"  # microfonul rămâne permis pt STT
+    return resp
+
+def assert_csrf(request: Request):
+    """Dacă REQUIRE_CSRF=1, verifică headerul x-csrf-token."""
+    if not REQUIRE_CSRF:
+        return
+    token = request.headers.get("x-csrf-token", "")
+    if not token or token != CSRF_TOKEN:
+        raise HTTPException(status_code=403, detail="CSRF token invalid sau lipsă.")
 
 # ---------- Logs ----------
 os.makedirs("logs", exist_ok=True)
@@ -78,8 +110,8 @@ metrics = Metrics()
 # ---------- Rate limiting (simplu, în memorie) ----------
 WINDOW_SEC = 60
 LIMITS = {
-    "/api/chat": 30,          # 30 req/min
-    "/api/chat/stream": 20,   # 20 stream/min
+    "/api/chat": 30,
+    "/api/chat/stream": 20,
     "/api/tts": 60,
     "/api/stt": 20,
     "/api/image": 30,
@@ -221,6 +253,7 @@ def home(request: Request):
 
 @app.post("/api/chat")
 def chat_endpoint(req: ChatRequest, request: Request):
+    assert_csrf(request)
     ip = client_ip(request)
     if not allow(ip, "/api/chat"):
         metrics.drop()
@@ -229,6 +262,9 @@ def chat_endpoint(req: ChatRequest, request: Request):
     msg = (req.message or "").strip()
     if not msg:
         return JSONResponse({"error": "Mesajul este gol."}, status_code=400)
+    if len(msg) > MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=413, detail=f"Mesaj prea lung (>{MAX_PROMPT_CHARS} caractere).")
+
     sid = (req.session_id or "default").strip() or "default"
 
     if contains_profanity(msg):
@@ -271,6 +307,8 @@ def chat_stream(q: str, sid: Optional[str] = None, request: Request = None):
     q = (q or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="Mesajul este gol.")
+    if len(q) > MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=413, detail=f"Mesaj prea lung (>{MAX_PROMPT_CHARS} caractere).")
     sid = (sid or "default").strip() or "default"
 
     if contains_profanity(q):
@@ -301,7 +339,7 @@ def chat_stream(q: str, sid: Optional[str] = None, request: Request = None):
 
         save_msg(sid, "user", q)
 
-        # 3) răspuns final + tokens
+        # 3) răspuns + tokens
         answer, usage = chat_once(prompt, k=3, return_usage=True)
         metrics.add_tokens(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
         log_json(kind="chat_stream", ip=ip, sid=sid,
@@ -319,7 +357,8 @@ def chat_stream(q: str, sid: Optional[str] = None, request: Request = None):
 
 # ---------- Session maintenance ----------
 @app.post("/api/session/reset")
-def reset_session(req: ResetRequest):
+def reset_session(req: ResetRequest, request: Request):
+    assert_csrf(request)
     sid = (req.session_id or "").strip()
     if not sid:
         raise HTTPException(status_code=400, detail="session_id lipsă")
@@ -330,13 +369,18 @@ def reset_session(req: ResetRequest):
 # ---------- TTS ----------
 @app.post("/api/tts")
 def tts_endpoint(req: TTSRequest, request: Request):
+    assert_csrf(request)
     ip = client_ip(request)
     if not allow(ip, "/api/tts"):
         metrics.drop()
         raise HTTPException(status_code=429, detail="Rate limit depășit pentru /api/tts.")
+
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text gol.")
+    if len(text) > MAX_TTS_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text prea lung pentru TTS (>{MAX_TTS_CHARS} caractere).")
+
     try:
         result = client.audio.speech.create(model=TTS_MODEL, voice="alloy", input=text)
         audio_bytes = result.content
@@ -346,19 +390,34 @@ def tts_endpoint(req: TTSRequest, request: Request):
     return Response(content=audio_bytes, media_type="audio/mpeg", headers=headers)
 
 # ---------- STT ----------
+ALLOWED_AUDIO_TYPES = {
+    "audio/wav","audio/x-wav","audio/mpeg","audio/mp3","audio/webm","audio/ogg","audio/m4a","audio/x-m4a"
+}
+
 @app.post("/api/stt")
 async def stt_endpoint(audio: UploadFile = File(...), request: Request = None):
+    assert_csrf(request)
     ip = client_ip(request)
     if not allow(ip, "/api/stt"):
         metrics.drop()
         raise HTTPException(status_code=429, detail="Rate limit depășit pentru /api/stt.")
     try:
+        ct = (audio.content_type or "").lower()
+        if ct and ct not in ALLOWED_AUDIO_TYPES:
+            raise HTTPException(status_code=415, detail=f"Tip de fișier neacceptat: {ct}")
+
         raw = await audio.read()
         if not raw:
             raise HTTPException(status_code=400, detail="Fișier audio gol.")
+
+        max_bytes = MAX_STT_MB * 1024 * 1024
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"Fișier prea mare (> {MAX_STT_MB}MB).")
+
         suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(raw); tmp_path = tmp.name
+
         with open(tmp_path, "rb") as f:
             tr = client.audio.transcriptions.create(model=STT_MODEL, file=f)
         os.unlink(tmp_path)
@@ -371,13 +430,18 @@ async def stt_endpoint(audio: UploadFile = File(...), request: Request = None):
 # ---------- Image Generation ----------
 @app.post("/api/image")
 def image_endpoint(req: ImageRequest, request: Request):
+    assert_csrf(request)
     ip = client_ip(request)
     if not allow(ip, "/api/image"):
         metrics.drop()
         raise HTTPException(status_code=429, detail="Rate limit depășit pentru /api/image.")
+
     title = (req.title or "").strip() or _extract_title_from_text(req.text or "")
     if not title:
         raise HTTPException(status_code=400, detail="Nu am putut detecta titlul. Trimite 'title' explicit în request.")
+    if len(title) > 120:
+        raise HTTPException(status_code=413, detail="Titlul detectat e prea lung (>120 caractere).")
+
     prompt = (
         f"Generează o ilustrație de copertă sugestivă pentru cartea „{title}”. "
         f"Stil modern, clar, cu contrast bun. Fără text mare pe imagine."
@@ -394,24 +458,23 @@ def image_endpoint(req: ImageRequest, request: Request):
 def metrics_endpoint():
     with metrics.lock:
         lines = []
-        # Requests
         lines.append("# HELP smart_requests_total Număr total de request-uri")
         lines.append("# TYPE smart_requests_total counter")
         for path, cnt in metrics.by_path.items():
             lines.append(f'smart_requests_total{{path="{path}"}} {cnt}')
-        # Latency
+
         lines.append("# HELP smart_request_latency_seconds Timp total pe endpoint (secunde)")
         lines.append("# TYPE smart_request_latency_seconds summary")
         for path, total in metrics.latency_sum.items():
             count = metrics.latency_count.get(path, 1)
             lines.append(f'smart_request_latency_seconds_sum{{path="{path}"}} {total:.6f}')
             lines.append(f'smart_request_latency_seconds_count{{path="{path}"}} {count}')
-        # Tokens
+
         lines.append("# HELP smart_chat_tokens_total Tokeni consumați (prompt/completion)")
         lines.append("# TYPE smart_chat_tokens_total counter")
         lines.append(f'smart_chat_tokens_total{{type="prompt"}} {metrics.chat_tokens_prompt}')
         lines.append(f'smart_chat_tokens_total{{type="completion"}} {metrics.chat_tokens_completion}')
-        # Rate limit drops
+
         lines.append("# HELP smart_rate_limit_drops_total Cereri respinse de rate limit")
         lines.append("# TYPE smart_rate_limit_drops_total counter")
         lines.append(f'smart_rate_limit_drops_total {metrics.rate_limit_drops}')
