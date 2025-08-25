@@ -1,0 +1,17 @@
+{"ts": 1756134816, "ip": "127.0.0.1", "path": "/api/session/reset", "method": "POST", "latency_ms": 11}
+{"ts": 1756134851, "ip": "127.0.0.1", "path": "/api/chat/stream", "method": "GET", "latency_ms": 2334}
+{"kind": "chat_stream", "ip": "127.0.0.1", "sid": "37a5ac77-6619-4955-bf33-ec0471fc1233", "prompt_tokens": 221, "completion_tokens": 198}
+{"ts": 1756134862, "ip": "127.0.0.1", "path": "/api/tts", "method": "POST", "latency_ms": 2968}
+{"ts": 1756134872, "ip": "127.0.0.1", "path": "/metrics", "method": "GET", "latency_ms": 1}
+{"ts": 1756134872, "ip": "127.0.0.1", "path": "/favicon.ico", "method": "GET", "latency_ms": 0}
+{"ts": 1756134872, "ip": "127.0.0.1", "path": "/api/tts", "method": "POST", "latency_ms": 3314}
+{"ts": 1756134886, "ip": "127.0.0.1", "path": "/api/tts", "method": "POST", "latency_ms": 3034}
+{"ts": 1756134896, "ip": "127.0.0.1", "path": "/api/tts", "method": "POST", "latency_ms": 4213}
+{"ts": 1756134914, "ip": "127.0.0.1", "path": "/api/tts", "method": "POST", "latency_ms": 6205}
+{"ts": 1756134971, "ip": "127.0.0.1", "path": "/metrics", "method": "GET", "latency_ms": 1}
+{"ts": 1756134987, "ip": "127.0.0.1", "path": "/api/chat/stream", "method": "GET", "latency_ms": 2263}
+{"kind": "chat_stream", "ip": "127.0.0.1", "sid": "37a5ac77-6619-4955-bf33-ec0471fc1233", "prompt_tokens": 442, "completion_tokens": 215}
+{"ts": 1756135003, "ip": "127.0.0.1", "path": "/metrics", "method": "GET", "latency_ms": 0}
+{"ts": 1756135491, "ip": "127.0.0.1", "path": "/", "method": "GET", "latency_ms": 53}
+{"ts": 1756135505, "ip": "127.0.0.1", "path": "/api/chat/stream", "method": "GET", "latency_ms": 2318}
+{"kind": "chat_stream", "ip": "127.0.0.1", "sid": "37a5ac77-6619-4955-bf33-ec0471fc1233", "prompt_tokens": 667, "completion_tokens": 195}
