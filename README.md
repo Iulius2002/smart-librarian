@@ -1,183 +1,199 @@
-# Smart Librarian — RAG + Tool + Web UI (FastAPI)
+# Smart Librarian — RAG + Tools + Web UI (FastAPI)
 
-Chatbot pentru recomandări de cărți:
-- **RAG** pe **ChromaDB** (vector store local, non-OpenAI)
-- **Tool calling**: `get_summary_by_title` (rezumat complet din dataset local)
-- **Web UI** tip ChatGPT (FastAPI + HTML/CSS/JS) cu **STT** (dictare, browser) și **TTS** (citire, browser)
-- **Opțional server-side**: TTS (`gpt-4o-mini-tts`) și STT (Whisper)
+A book-recommendation chatbot that combines **Retrieval-Augmented Generation (RAG)** over a local dataset with a **tool** for pulling full summaries, and a lightweight **web UI** (FastAPI + HTML/CSS/JS) offering optional **speech-to-text (STT)** and **text-to-speech (TTS)**.
 
-## 1. Cerințe
-- Python 3.10+
-- Cheie OpenAI în `.env`
+- **Vector store:** ChromaDB (local, non-OpenAI)  
+- **Embeddings:** OpenAI (configurable)  
+- **Tool calling:** `get_summary_by_title` (returns full summary from local JSON)  
+- **Web UI:** Chat-style interface with browser STT/TTS via Web Speech API  
+- **Optional server-side:** TTS (`gpt-4o-mini-tts`) and STT (Whisper)  
 
-## 2. Instalare
+---
 
+## Table of Contents
+- [Features](#features)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Dataset](#dataset)
+- [Build the Vector Store (Ingestion)](#build-the-vector-store-ingestion)
+- [Quick Tests (CLI)](#quick-tests-cli)
+- [Run the Web Server](#run-the-web-server)
+- [REST API](#rest-api)
+- [Project Structure](#project-structure)
+- [Tips & Troubleshooting](#tips--troubleshooting)
+- [Roadmap](#roadmap)
+- [License](#license)
 
+---
+
+## Features
+
+- **RAG on local ChromaDB** for low-latency, local retrieval (HNSW, cosine).  
+- **Deterministic tool call**: `get_summary_by_title` pulls the full book summary from your dataset for high-quality answers.  
+- **Simple chat UI** (FastAPI served page) with **in-browser STT/TTS**; optional **server-side** TTS/STT endpoints for consistent quality.  
+- **Content moderation**: basic language filter before hitting the LLM.  
+
+---
+
+## Architecture
+
+User → Web UI (FastAPI + HTML/JS)
+│
+▼
+/api/chat
+│
+▼
+Retrieval over ChromaDB ←— book_summaries.json (local)
+│ top-K
+▼
+LLM selects candidate title
+│
+├── tool: get_summary_by_title → returns full summary
+▼
+Compose final answer + sources
+
+Optional:
+
+/api/tts (server-side TTS with gpt-4o-mini-tts)
+
+/api/stt (server-side STT with Whisper)
+
+yaml
+Copy code
+
+---
+
+## Requirements
+
+- **Python** 3.10+  
+- **OpenAI API key** stored in `.env` at the project root.  
+- Optional for `/api/stt` uploads: `python-multipart`.  
+
+---
+
+## Installation
+
+```bash
+# Clone
+git clone https://github.com/Iulius2002/smart-librarian.git
+cd smart-librarian
+
+# Install Python deps
 pip install -r requirements.txt
-Dacă vei face upload audio la /api/stt, mai instalează:
 
+# If you plan to POST audio to /api/stt:
 pip install python-multipart
+Configuration
+Create a .env file at the project root:
 
-3) Configurare
-
-Creează un fișier .env în rădăcina proiectului:
-
-OPENAI_API_KEY=sk-...cheia-ta...
+dotenv
+Copy code
+OPENAI_API_KEY=sk-...your-key...
 CHROMA_DIR=data/chroma_db
+.env is already ignored by git; data/chroma_db is a local persistence folder for Chroma.
 
+Dataset
+Place your dataset (≥ 10 books) in data/:
 
-.env NU se comite în git (e în .gitignore).
+book_summaries.json — full summaries (used by RAG + tool)
 
-4) Dataset minim (10+ cărți)
+book_summaries.md — short summaries (for display/theme)
 
-Fișierele din data/:
+Re-run ingestion whenever you add/update books.
 
-book_summaries.json – rezumate complete (folosite la RAG + tool)
-
-book_summaries.md – rezumate scurte (doar pentru afișare/temă)
-
-Poți extinde oricând datasetul; după modificare, rerulează ingestia (pasul următor).
-
-5) Ingestie (construiește vector store)
-
-Creează embeddings și salvează în Chroma:
-
+Build the Vector Store (Ingestion)
+bash
+Copy code
 python -m src.ingest
+This will populate data/chroma_db/ (not committed).
 
+Quick Tests (CLI)
+Test retrieval (no LLM):
 
-Creează folderul data/chroma_db/ (persistență locală). Nu îl urca în repo.
-
-6) Teste rapide (CLI)
-
-Retrieval (fără LLM):
-
+bash
+Copy code
 python -m src.test_retrieval
+Example queries:
 
+„o carte despre libertate și control social”
 
-Exemple de interogări:
+„prietenie și magie”
 
-o carte despre libertate și control social
+„război și destine”
 
-prietenie și magie
+End-to-end chat (RAG + LLM + tool):
 
-război și destine
-
-Chat end-to-end (RAG + LLM + tool):
-
+bash
+Copy code
 python -m src.test_chat
-
-7) Pornire server (Web UI)
-
-Pornește backendul FastAPI:
-
+Run the Web Server
+bash
+Copy code
 uvicorn src.server:app --reload
+Open the UI at: http://127.0.0.1:8000/
 
+In the UI you can:
 
-Deschide în browser: http://127.0.0.1:8000/
+type or dictate questions,
 
-În UI:
+toggle automatic TTS playback,
 
-scrii sau dictezi (🎙️) întrebarea;
+pick a ro-RO voice in your system for natural pronunciation (if available).
 
-apeși Trimite;
-
-poți activa „🔊 Auto” ca răspunsurile să fie citite de TTS din browser;
-
-alege o voce ro-RO din dropdown (dacă e disponibilă în sistemul tău) pentru pronunție mai naturală.
-
-8) API (pentru integrare)
+REST API
 POST /api/chat
+Performs RAG + LLM + tool and returns the final answer + top-3 source snippets.
 
-Primește un mesaj, face RAG + LLM + tool și întoarce răspunsul final + sursele (top-3 fragmente).
+Request
 
-Request:
-
+json
+Copy code
 { "message": "Vreau o carte despre prietenie și magie" }
+Response
 
-
-Response:
-
+json
+Copy code
 {
-  "answer": "<text final: recomandare + (dacă e posibil) rezumat complet>",
-  "sources": [{ "title": "The Hobbit", "preview": "..." }, { "title": "The Lord of the Rings", "preview": "..." }, { "title": "Pride and Prejudice", "preview": "..." }]
+  "answer": "<final text: recomandare + rezumat complet>",
+  "sources": [
+    { "title": "The Hobbit", "preview": "..." },
+    { "title": "The Lord of the Rings", "preview": "..." },
+    { "title": "Pride and Prejudice", "preview": "..." }
+  ]
 }
+POST /api/tts (optional — server-side TTS)
+Generates MP3 from text using gpt-4o-mini-tts.
 
+curl example
 
-Are filtru simplu de limbaj nepotrivit; la detecție răspunde politicos fără a apela LLM.
-
-POST /api/tts (opțional – TTS server-side)
-
-Generează audio MP3 din text folosind gpt-4o-mini-tts.
-
-Request (JSON):
-
-{ "text": "Acesta este un test în limba română." }
-
-
-Response: audio/mpeg
-
-Exemplu:
-
+bash
+Copy code
 curl -s -X POST http://127.0.0.1:8000/api/tts \
   -H "Content-Type: application/json" \
   -d '{"text":"Acesta este un test în limba română."}' \
   --output tts.mp3
+POST /api/stt (optional — server-side STT)
+Transcribes audio using Whisper (whisper-1).
 
-POST /api/stt (opțional – STT server-side)
+curl example
 
-Transcrie fișier audio în text folosind Whisper (whisper-1).
-
-Request: multipart/form-data cu câmpul audio
-Response:
-
-{ "text": "Transcrierea în limba română..." }
-
-
-Exemplu:
-
+bash
+Copy code
 curl -s -X POST http://127.0.0.1:8000/api/stt \
-  -F "audio=@/cale/catre/inregistrare.m4a"
-
-
-Pentru upload funcțional, asigură-te că ai python-multipart instalat.
-
-9) Arhitectură pe scurt
-
-RAG: text-embedding-3-small → ChromaDB (HNSW, cosine)
-
-Chat:
-
-Interogare → retrieval (top-K fragmente)
-
-LLM alege titlul exact
-
-Se apelează tool get_summary_by_title (rezumat complet din JSON)
-
-LLM compune răspunsul final (recomandare + rezumat)
-
-UI: FastAPI servește pagina; Web Speech API pentru STT/TTS în browser; opțional TTS/STT pe server pentru calitate mai stabilă.
-
-10) Sfaturi & depanare
-
-Nu găsește .env → rulează din rădăcina proiectului; load_dotenv() e apelat în config.py.
-
-ModuleNotFoundError: src... → rulează cu python -m src.nume_script (din rădăcină).
-
-RAG „ratează” → extinde/rafinează rezumatele, adaugă mai multe cărți, rulează din nou ingestia.
-
-TTS sacadat în browser → alege o voce ro-RO; UI-ul redă textul pe propoziții pentru fluiditate.
-
-Costuri: embeddings la ingestie; chat la cerere; opțional TTS/STT server-side.
-
-11) Structura proiectului (orientativ)
+  -F "audio=@/path/to/recording.m4a"
+Project Structure
+pgsql
+Copy code
 smart-librarian/
 ├─ README.md
 ├─ requirements.txt
-├─ .env               # în gitignore
+├─ .env                # (gitignored)
 ├─ data/
 │  ├─ book_summaries.json
 │  ├─ book_summaries.md
-│  └─ chroma_db/      # generat de Chroma (în gitignore)
+│  └─ chroma_db/       # generated by Chroma (gitignored)
 └─ src/
    ├─ __init__.py
    ├─ config.py
@@ -191,3 +207,24 @@ smart-librarian/
    ├─ server.py
    └─ templates/
       └─ index.html
+Tips & Troubleshooting
+.env not found → run commands from the project root.
+
+ModuleNotFoundError: src... → use python -m src.<script>.
+
+Retrieval weak? → expand dataset, re-run ingestion.
+
+Browser TTS choppy? → choose a ro-RO voice; UI speaks sentence-by-sentence.
+
+Costs → embeddings at ingestion; chat per request; optional server-side TTS/STT per request.
+
+Roadmap
+ Add unit tests for retrieval and tool routing
+
+ Configurable models & top-K via .env
+
+ Dockerfile and devcontainer
+
+ Basic analytics (latency, hit rate)
+
+ Optional auth for the web UI
